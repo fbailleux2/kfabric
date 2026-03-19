@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -343,22 +344,48 @@ class Orchestrator:
                 ),
             )
         )
-        for parsed, score, _decision, candidate in self.session.execute(stmt):
+        for parsed, score, decision, candidate in self.session.execute(stmt):
             accepted_documents.append(
                 {
                     "id": parsed.id,
                     "title": parsed.extracted_title or candidate.title,
                     "source_url": candidate.source_url,
-                    "score": str(score.global_score),
+                    "score": score.global_score,
+                    "domain": candidate.domain,
+                    "document_type": candidate.document_type,
+                    "extraction_method": parsed.extraction_method,
+                    "text_length": parsed.text_length,
+                    "headings": list(parsed.headings or [])[:4],
+                    "excerpt": _build_excerpt(parsed.normalized_text),
+                    "decision_status": decision.status,
                 }
             )
             accepted_ids.append(parsed.id)
         syntheses = list(self.session.scalars(select(FragmentSynthesis).where(FragmentSynthesis.query_id == query_id)))
         synthesis_payload = [
-            {"id": synthesis.id, "theme": synthesis.theme, "overall_confidence": str(synthesis.overall_confidence)}
+            {
+                "id": synthesis.id,
+                "theme": synthesis.theme,
+                "overall_confidence": synthesis.overall_confidence,
+                "generated_from_n_fragments": synthesis.generated_from_n_fragments,
+                "generated_from_n_rejected_docs": synthesis.generated_from_n_rejected_docs,
+                "index_priority": synthesis.index_priority,
+                "excerpt": _build_excerpt(synthesis.synthesis_markdown),
+            }
             for synthesis in syntheses
         ]
-        corpus_markdown = build_corpus_markdown(query.theme or query.question or query.id, accepted_documents, synthesis_payload)
+        corpus_markdown = build_corpus_markdown(
+            query.theme or query.question or query.id,
+            accepted_documents,
+            synthesis_payload,
+            query_context={
+                "question": query.question,
+                "keywords": list(query.keywords or []),
+                "quality_target": query.quality_target,
+                "trace_id": query.trace_id,
+                "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            },
+        )
         corpus = Corpus(
             query_id=query_id,
             title=query.theme or query.question or f"Corpus {query.id}",
@@ -418,3 +445,10 @@ class Orchestrator:
         if fragments:
             return f"Document rejected globally ({global_score}/100) but {len(fragments)} fragments were salvaged"
         return f"Document rejected with score {global_score}/100 and no salvageable fragment"
+
+
+def _build_excerpt(text: str, max_chars: int = 320) -> str:
+    cleaned = " ".join(text.split()).strip()
+    if len(cleaned) <= max_chars:
+        return cleaned
+    return cleaned[:max_chars].rstrip() + "..."

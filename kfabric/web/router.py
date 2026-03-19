@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -12,6 +12,7 @@ from kfabric.api.deps import get_db, get_orchestrator
 from kfabric.config import get_settings
 from kfabric.domain.schemas import QueryCreate
 from kfabric.infra.models import CandidateDocument, Corpus, FragmentCluster, FragmentSynthesis, Query
+from kfabric.services.corpus_export import export_filename, render_corpus_html
 from kfabric.services.orchestrator import Orchestrator
 
 
@@ -171,3 +172,23 @@ def prepare_index(
         raise ValueError(f"Corpus {corpus_id} not found")
     orchestrator.prepare_index(corpus_id)
     return RedirectResponse(url=f"/queries/{corpus.query_id}", status_code=303)
+
+
+@router.get("/web/corpora/{corpus_id}/export.html", response_class=HTMLResponse)
+def export_corpus_html(corpus_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
+    corpus = db.get(Corpus, corpus_id)
+    if not corpus:
+        raise ValueError(f"Corpus {corpus_id} not found")
+    return HTMLResponse(content=render_corpus_html(corpus))
+
+
+@router.get("/web/corpora/{corpus_id}/export.md")
+def export_corpus_markdown(corpus_id: str, db: Session = Depends(get_db)) -> Response:
+    corpus = db.get(Corpus, corpus_id)
+    if not corpus:
+        raise ValueError(f"Corpus {corpus_id} not found")
+    return Response(
+        content=corpus.corpus_markdown,
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="{export_filename(corpus, "md")}"'},
+    )

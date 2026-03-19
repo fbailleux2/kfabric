@@ -150,9 +150,13 @@
           <p>{{ corpus.corpus_markdown[:280] }}{% if corpus.corpus_markdown|length > 280 %}...{% endif %}</p>
           <div class="between">
             <small>Index prêt: {{ "oui" if corpus.index_ready else "non" }}</small>
-            <form method="post" action="/web/corpora/{{ corpus.id }}/prepare-index">
-              <button type="submit">Préparer l’index</button>
-            </form>
+            <div class="inline-actions">
+              <a href="/web/corpora/{{ corpus.id }}/export.html" target="_blank">Voir l’export</a>
+              <a href="/web/corpora/{{ corpus.id }}/export.md">Markdown</a>
+              <form method="post" action="/web/corpora/{{ corpus.id }}/prepare-index">
+                <button type="submit">Préparer l’index</button>
+              </form>
+            </div>
           </div>
         </div>
       {% else %}

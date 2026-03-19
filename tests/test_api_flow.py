@@ -47,6 +47,18 @@ def test_full_api_flow(client):
     corpus_response = client.post(f"/api/v1/queries/{query_id}:build-corpus")
     assert corpus_response.status_code == 200
     corpus_id = corpus_response.json()["id"]
+    assert "Resume executif" in corpus_response.json()["corpus_markdown"]
+    assert "Dossier principal" in corpus_response.json()["corpus_markdown"]
+
+    export_markdown_response = client.get(f"/api/v1/corpora/{corpus_id}:export?format=markdown")
+    assert export_markdown_response.status_code == 200
+    assert export_markdown_response.headers["content-type"].startswith("text/markdown")
+    assert "KFabric Corpus" in export_markdown_response.text
+
+    export_html_response = client.get(f"/api/v1/corpora/{corpus_id}:export?format=html")
+    assert export_html_response.status_code == 200
+    assert export_html_response.headers["content-type"].startswith("text/html")
+    assert "<html" in export_html_response.text.lower()
 
     prepare_index_response = client.post(f"/api/v1/corpora/{corpus_id}:prepare-index")
     assert prepare_index_response.status_code == 200
@@ -77,3 +89,31 @@ def test_web_views_render(client):
     dashboard = client.get(response.headers["location"])
     assert dashboard.status_code == 200
     assert "Documents candidats" in dashboard.text
+
+
+def test_web_corpus_export_views(client):
+    create_response = client.post(
+        "/api/v1/queries",
+        json={
+            "theme": "Corpus demonstration",
+            "question": "Quels documents retenir ?",
+            "keywords": ["corpus", "demo"],
+            "preferred_domains": ["europa.eu"],
+        },
+    )
+    query_id = create_response.json()["id"]
+
+    discover_response = client.post(f"/api/v1/queries/{query_id}:discover")
+    candidate = discover_response.json()[0]
+    collected_id = client.post(f"/api/v1/candidates/{candidate['id']}:collect").json()["collected_document_id"]
+    client.post(f"/api/v1/documents/{collected_id}:analyze")
+    corpus_id = client.post(f"/api/v1/queries/{query_id}:build-corpus").json()["id"]
+
+    html_response = client.get(f"/web/corpora/{corpus_id}/export.html")
+    assert html_response.status_code == 200
+    assert "Export corpus KFabric" in html_response.text
+
+    markdown_response = client.get(f"/web/corpora/{corpus_id}/export.md")
+    assert markdown_response.status_code == 200
+    assert markdown_response.headers["content-type"].startswith("text/markdown")
+    assert "KFabric Corpus" in markdown_response.text

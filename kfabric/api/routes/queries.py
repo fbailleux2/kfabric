@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from kfabric.api.deps import get_db, get_orchestrator, require_api_key
@@ -32,6 +32,7 @@ from kfabric.domain.schemas import (
     SynthesisResponse,
 )
 from kfabric.infra.models import Corpus
+from kfabric.services.corpus_export import export_filename, render_corpus_html
 from kfabric.services.orchestrator import Orchestrator
 
 
@@ -107,6 +108,30 @@ def create_synthesis(
 @router.post("/queries/{query_id}:build-corpus", response_model=CorpusResponse)
 def build_corpus(query_id: str, orchestrator: Orchestrator = Depends(get_orchestrator)) -> CorpusResponse:
     return serialize_corpus(orchestrator.build_corpus(query_id))
+
+
+@router.get("/corpora/{corpus_id}:export")
+def export_corpus(
+    corpus_id: str,
+    format: str = Query(default="markdown", pattern="^(markdown|html)$"),
+    db: Session = Depends(get_db),
+) -> Response:
+    corpus = db.get(Corpus, corpus_id)
+    if not corpus:
+        raise ValueError(f"Corpus {corpus_id} not found")
+
+    if format == "html":
+        return Response(
+            content=render_corpus_html(corpus),
+            media_type="text/html",
+            headers={"Content-Disposition": f'inline; filename="{export_filename(corpus, "html")}"'},
+        )
+
+    return Response(
+        content=corpus.corpus_markdown,
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="{export_filename(corpus, "md")}"'},
+    )
 
 
 @router.get("/corpora/{corpus_id}", response_model=CorpusResponse)
