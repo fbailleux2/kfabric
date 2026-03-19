@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from secrets import compare_digest
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -8,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from kfabric.api.deps import get_db, get_orchestrator
+from kfabric.api.deps import WEB_SESSION_COOKIE, get_db, get_orchestrator, issue_web_session_cookie_value, require_web_session
 from kfabric.config import get_settings
 from kfabric.domain.schemas import QueryCreate
 from kfabric.infra.models import CandidateDocument, Corpus, FragmentCluster, FragmentSynthesis, Query
@@ -16,7 +17,7 @@ from kfabric.services.corpus_export import export_filename, render_corpus_html
 from kfabric.services.orchestrator import Orchestrator
 
 
-router = APIRouter(include_in_schema=False)
+router = APIRouter(include_in_schema=False, dependencies=[Depends(require_web_session)])
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
 
 
@@ -65,6 +66,62 @@ def _dashboard_context(db: Session, query_id: str) -> dict[str, object]:
         "corpora": corpora,
         "accepted_count": accepted_count,
     }
+
+
+@router.get("/auth", response_class=HTMLResponse)
+def auth_page(request: Request) -> HTMLResponse:
+    settings = get_settings()
+    if not settings.api_key:
+        return RedirectResponse(url="/", status_code=303)
+    if getattr(request.state, "web_authenticated", False):
+        return RedirectResponse(url="/", status_code=303)
+    return templates.TemplateResponse(
+        request=request,
+        name="auth.html",
+        context={
+            "request": request,
+            "settings": settings,
+            "next_path": request.query_params.get("next") or "/",
+            "error_message": None,
+        },
+    )
+
+
+@router.post("/web/auth/session")
+def create_web_session(request: Request, api_key: str = Form(default=""), next_path: str = Form(default="/")) -> Response:
+    settings = get_settings()
+    if not settings.api_key:
+        return RedirectResponse(url="/", status_code=303)
+    if not compare_digest(api_key, settings.api_key):
+        return templates.TemplateResponse(
+            request=request,
+            name="auth.html",
+            context={
+                "request": request,
+                "settings": settings,
+                "next_path": next_path or "/",
+                "error_message": "Clé API invalide",
+            },
+            status_code=401,
+        )
+
+    response = RedirectResponse(url=next_path or "/", status_code=303)
+    response.set_cookie(
+        WEB_SESSION_COOKIE,
+        issue_web_session_cookie_value(settings.api_key),
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="strict",
+        max_age=settings.session_ttl_seconds,
+    )
+    return response
+
+
+@router.post("/web/auth/logout")
+def clear_web_session() -> RedirectResponse:
+    response = RedirectResponse(url="/auth", status_code=303)
+    response.delete_cookie(WEB_SESSION_COOKIE)
+    return response
 
 
 @router.get("/", response_class=HTMLResponse)

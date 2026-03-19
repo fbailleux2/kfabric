@@ -130,6 +130,26 @@ small,
 .site-nav {
   display: flex;
   gap: 1rem;
+  align-items: center;
+}
+
+.site-nav form {
+  margin: 0;
+}
+
+.site-nav button {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  padding: 0;
+  box-shadow: none;
+  transform: none;
+}
+
+.site-nav button:hover {
+  transform: none;
+  box-shadow: none;
+  color: var(--text);
 }
 
 .hero-card {

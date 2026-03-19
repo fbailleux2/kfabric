@@ -22,6 +22,15 @@
           <a href="/docs">API</a>
           <a href="/api/v1/version">Version</a>
           <a href="/api/v1/mcp/capabilities">MCP</a>
+          {% if settings.api_key %}
+            {% if request.state.web_authenticated %}
+              <form method="post" action="/web/auth/logout">
+                <button type="submit">Déconnexion</button>
+              </form>
+            {% else %}
+              <a href="/auth">Connexion</a>
+            {% endif %}
+          {% endif %}
         </nav>
       </header>
       <main>

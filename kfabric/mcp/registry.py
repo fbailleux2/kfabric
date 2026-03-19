@@ -198,7 +198,7 @@ def _get_corpus_status(_orchestrator: Orchestrator, db: Session, _settings: AppS
 
 
 def get_tool_definitions() -> list[ToolDefinition]:
-    common_security = {"authentication": "api_key_optional", "audit": True}
+    common_security = {"authentication": "api_key_when_configured", "audit": True}
     return [
         ToolDefinition(
             name="discover_documents",

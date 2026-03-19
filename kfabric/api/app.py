@@ -4,9 +4,9 @@ from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -34,6 +34,26 @@ class TraceMiddleware(BaseHTTPMiddleware):
             REQUEST_LATENCY.labels(request.method, request.url.path).observe(duration)
         if response is not None:
             response.headers["x-trace-id"] = trace_id
+            response.headers["x-content-type-options"] = "nosniff"
+            response.headers["x-frame-options"] = "DENY"
+            response.headers["referrer-policy"] = "no-referrer"
+            response.headers["permissions-policy"] = "camera=(), microphone=(), geolocation=()"
+            response.headers["cross-origin-opener-policy"] = "same-origin"
+            response.headers["cache-control"] = "no-store"
+            if request.url.scheme == "https":
+                response.headers["strict-transport-security"] = "max-age=31536000; includeSubDomains"
+            if _is_html_response(response):
+                response.headers["content-security-policy"] = (
+                    "default-src 'self'; "
+                    "img-src 'self' data:; "
+                    "style-src 'self' 'unsafe-inline'; "
+                    "script-src 'self' https://unpkg.com 'unsafe-inline'; "
+                    "font-src 'self' data:; "
+                    "connect-src 'self'; "
+                    "frame-ancestors 'none'; "
+                    "base-uri 'self'; "
+                    "form-action 'self'"
+                )
         return response
 
 
@@ -52,6 +72,35 @@ def create_app() -> FastAPI:
     app.include_router(web_router)
 
     logger = get_logger(__name__)
+
+    @app.exception_handler(HTTPException)
+    async def handle_http_exception(request: Request, exc: HTTPException):
+        trace_id = getattr(request.state, "trace_id", f"tr_{uuid4().hex[:12]}")
+        logger.warning(
+            "kfabric.http_error",
+            path=str(request.url.path),
+            trace_id=trace_id,
+            status_code=exc.status_code,
+            detail=str(exc.detail),
+        )
+
+        if exc.status_code == 401 and _is_browser_path(request.url.path):
+            response = RedirectResponse(url=f"/auth?next={request.url.path}", status_code=303)
+            response.headers["x-trace-id"] = trace_id
+            return response
+
+        return JSONResponse(
+            status_code=exc.status_code,
+            headers=exc.headers,
+            content={
+                "error": {
+                    "code": _error_code_for_status(exc.status_code),
+                    "message": str(exc.detail),
+                    "details": {},
+                    "trace_id": trace_id,
+                }
+            },
+        )
 
     @app.exception_handler(ValueError)
     async def handle_value_error(request: Request, exc: ValueError) -> JSONResponse:
@@ -108,3 +157,26 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+def _is_html_response(response) -> bool:
+    media_type = response.headers.get("content-type", "").lower()
+    return "text/html" in media_type
+
+
+def _is_browser_path(path: str) -> bool:
+    return not path.startswith("/api/")
+
+
+def _error_code_for_status(status_code: int) -> str:
+    if status_code == 401:
+        return "unauthorized"
+    if status_code == 403:
+        return "forbidden"
+    if status_code == 404:
+        return "not_found"
+    if status_code == 422:
+        return "validation_error"
+    if 400 <= status_code < 500:
+        return "bad_request"
+    return "internal_error"

@@ -99,6 +99,22 @@ L'application démarre ensuite sur :
 - UI : `http://127.0.0.1:8000/`
 - API : `http://127.0.0.1:8000/docs`
 
+## Sécurité et accès
+
+KFabric peut fonctionner sans authentification en local, mais dès qu'une clé API
+est configurée via [`KFABRIC_API_KEY`](.env.example), l'accès est protégé :
+
+- l'API REST accepte `X-API-Key` ou `Authorization: Bearer ...`
+- l'interface web demande une session via `/auth`
+- les réponses exposent un `trace_id` et des headers de sécurité
+
+Exemple :
+
+```bash
+export KFABRIC_API_KEY="change-me"
+curl -H "Authorization: Bearer change-me" http://127.0.0.1:8000/api/v1/version
+```
+
 ## Démo produit
 
 Deux scénarios de démonstration reproductibles sont fournis dans
