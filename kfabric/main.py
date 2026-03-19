@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from uvicorn import run
 
 
@@ -19,3 +21,11 @@ def run_mcp() -> None:
 
     run_stdio_server()
 
+
+def run_migrations() -> None:
+    from alembic import command
+    from alembic.config import Config
+
+    project_root = Path(__file__).resolve().parent.parent
+    config = Config(str(project_root / "alembic.ini"))
+    command.upgrade(config, "head")

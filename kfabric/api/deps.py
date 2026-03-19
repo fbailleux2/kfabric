@@ -28,6 +28,9 @@ def require_api_key(
     x_api_key: str | None = Header(default=None),
     authorization: str | None = Header(default=None),
 ) -> None:
+    if _is_public_api_path(request.url.path):
+        request.state.api_authenticated = True
+        return
     request.state.api_authenticated = False
     if not settings.api_key:
         request.state.api_authenticated = True
@@ -88,3 +91,7 @@ def _build_web_session_token(api_key: str) -> str:
 
 def _is_public_web_path(path: str) -> bool:
     return path in {"/auth", "/web/auth/session", "/web/auth/logout"}
+
+
+def _is_public_api_path(path: str) -> bool:
+    return path in {"/api/v1/health", "/api/v1/readiness"}

@@ -228,6 +228,23 @@ class HealthResponse(SchemaModel):
     version: str
 
 
+class DependencyStatusResponse(SchemaModel):
+    name: str
+    status: str
+    target: str
+    latency_ms: float
+    detail: str = ""
+
+
+class ReadinessResponse(SchemaModel):
+    status: str
+    service: str
+    version: str
+    environment: str
+    secure_mode: bool
+    dependencies: dict[str, DependencyStatusResponse]
+
+
 class VersionResponse(SchemaModel):
     service: str
     version: str

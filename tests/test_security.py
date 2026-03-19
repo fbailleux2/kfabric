@@ -40,6 +40,52 @@ def test_api_requires_api_key_and_returns_consistent_error(tmp_path: Path, monke
         assert response.headers["x-frame-options"] == "DENY"
 
 
+def test_health_and_readiness_are_public_for_runtime_supervision(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(
+        "kfabric.api.routes.system.collect_runtime_status",
+        lambda settings: {
+            "status": "degraded",
+            "service": settings.app_name,
+            "version": "0.1.0",
+            "environment": settings.env,
+            "secure_mode": settings.secure_mode,
+            "dependencies": {
+                "database": {
+                    "name": "database",
+                    "status": "ok",
+                    "target": settings.database_url,
+                    "latency_ms": 1.0,
+                    "detail": "",
+                },
+                "storage": {
+                    "name": "storage",
+                    "status": "ok",
+                    "target": str(settings.storage_path),
+                    "latency_ms": 1.0,
+                    "detail": "",
+                },
+                "redis": {
+                    "name": "redis",
+                    "status": "error",
+                    "target": settings.redis_url,
+                    "latency_ms": 1.0,
+                    "detail": "connection refused",
+                },
+            },
+        },
+    )
+
+    with _build_secured_client(tmp_path, monkeypatch) as client:
+        health = client.get("/api/v1/health")
+        readiness = client.get("/api/v1/readiness")
+
+        assert health.status_code == 200
+        assert health.json()["status"] == "ok"
+        assert readiness.status_code == 200
+        assert readiness.json()["status"] == "degraded"
+        assert readiness.json()["dependencies"]["redis"]["status"] == "error"
+
+
 def test_api_accepts_bearer_token_and_sets_security_headers(tmp_path: Path, monkeypatch):
     with _build_secured_client(tmp_path, monkeypatch) as client:
         response = client.get("/api/v1/version", headers={"Authorization": "Bearer test-secret"})
@@ -49,6 +95,34 @@ def test_api_accepts_bearer_token_and_sets_security_headers(tmp_path: Path, monk
         assert response.headers["x-content-type-options"] == "nosniff"
         assert response.headers["referrer-policy"] == "no-referrer"
         assert response.headers["cache-control"] == "no-store"
+
+
+def test_readiness_returns_503_when_core_dependency_fails(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(
+        "kfabric.api.routes.system.collect_runtime_status",
+        lambda settings: {
+            "status": "not_ready",
+            "service": settings.app_name,
+            "version": "0.1.0",
+            "environment": settings.env,
+            "secure_mode": settings.secure_mode,
+            "dependencies": {
+                "database": {
+                    "name": "database",
+                    "status": "error",
+                    "target": settings.database_url,
+                    "latency_ms": 2.0,
+                    "detail": "database unavailable",
+                }
+            },
+        },
+    )
+
+    with _build_secured_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/v1/readiness")
+
+        assert response.status_code == 503
+        assert response.json()["status"] == "not_ready"
 
 
 def test_web_requires_session_then_allows_login(tmp_path: Path, monkeypatch):

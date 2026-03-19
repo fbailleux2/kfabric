@@ -101,6 +101,24 @@ L'application démarre ensuite sur :
 - UI : `http://127.0.0.1:8000/`
 - API : `http://127.0.0.1:8000/docs`
 
+Commandes utiles via [`Makefile`](Makefile) :
+
+```bash
+make install-extended
+make test
+make run-api
+```
+
+## Exploitation V1
+
+KFabric dispose maintenant d'un mode d'exploitation local plus stable :
+
+- `docker-compose.yml` avec migrations, healthchecks et volume de stockage
+- `Makefile` pour les commandes courantes
+- `readiness` détaillée sur `/api/v1/readiness`
+
+Le runbook dédié est disponible dans [`docs/v1-runbook.md`](docs/v1-runbook.md).
+
 ## Sécurité et accès
 
 KFabric peut fonctionner sans authentification en local, mais dès qu'une clé API

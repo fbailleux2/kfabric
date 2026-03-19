@@ -47,6 +47,7 @@ extended = [
 kfabric-api = "kfabric.main:run_api"
 kfabric-worker = "kfabric.main:run_worker"
 kfabric-mcp = "kfabric.main:run_mcp"
+kfabric-migrate = "kfabric.main:run_migrations"
 
 [tool.setuptools.packages.find]
 where = ["."]

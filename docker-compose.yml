@@ -2,65 +2,136 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_DB: kfabric
-      POSTGRES_USER: kfabric
-      POSTGRES_PASSWORD: kfabric
+      POSTGRES_DB: ${KFABRIC_POSTGRES_DB:-kfabric}
+      POSTGRES_USER: ${KFABRIC_POSTGRES_USER:-kfabric}
+      POSTGRES_PASSWORD: ${KFABRIC_POSTGRES_PASSWORD:-kfabric}
     ports:
-      - "5433:5432"
+      - "${KFABRIC_POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${KFABRIC_POSTGRES_USER:-kfabric} -d ${KFABRIC_POSTGRES_DB:-kfabric}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
 
   redis:
     image: redis:7
     ports:
-      - "6379:6379"
+      - "${KFABRIC_REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
 
   rabbitmq:
     image: rabbitmq:3-management
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "${KFABRIC_RABBITMQ_PORT:-5672}:5672"
+      - "${KFABRIC_RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
 
   qdrant:
     image: qdrant/qdrant:v1.12.5
     ports:
-      - "6333:6333"
+      - "${KFABRIC_QDRANT_PORT:-6333}:6333"
     volumes:
       - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  migrate:
+    build: .
+    command: ["kfabric-migrate"]
+    environment:
+      KFABRIC_ENV: ${KFABRIC_ENV:-development}
+      KFABRIC_APP_NAME: ${KFABRIC_APP_NAME:-KFabric}
+      KFABRIC_DATABASE_URL: ${KFABRIC_DATABASE_URL:-postgresql+psycopg://kfabric:kfabric@postgres:5432/kfabric}
+      KFABRIC_REDIS_URL: ${KFABRIC_REDIS_URL:-redis://redis:6379/0}
+      KFABRIC_RABBITMQ_URL: ${KFABRIC_RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672//}
+      KFABRIC_QDRANT_URL: ${KFABRIC_QDRANT_URL:-http://qdrant:6333}
+      KFABRIC_STORAGE_PATH: ${KFABRIC_STORAGE_PATH:-/app/storage}
+      KFABRIC_API_KEY: ${KFABRIC_API_KEY:-}
+      KFABRIC_ENABLE_MCP: ${KFABRIC_ENABLE_MCP:-true}
+      KFABRIC_ENABLE_METRICS: ${KFABRIC_ENABLE_METRICS:-true}
+      KFABRIC_SECURE_MODE: ${KFABRIC_SECURE_MODE:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - kfabric_storage:/app/storage
 
   api:
     build: .
-    env_file:
-      - .env.example
+    command: ["kfabric-api"]
     environment:
-      KFABRIC_DATABASE_URL: postgresql+psycopg://kfabric:kfabric@postgres:5432/kfabric
-      KFABRIC_REDIS_URL: redis://redis:6379/0
-      KFABRIC_RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672//
-      KFABRIC_QDRANT_URL: http://qdrant:6333
-      KFABRIC_STORAGE_PATH: /app/storage
+      KFABRIC_ENV: ${KFABRIC_ENV:-development}
+      KFABRIC_APP_NAME: ${KFABRIC_APP_NAME:-KFabric}
+      KFABRIC_DATABASE_URL: ${KFABRIC_DATABASE_URL:-postgresql+psycopg://kfabric:kfabric@postgres:5432/kfabric}
+      KFABRIC_REDIS_URL: ${KFABRIC_REDIS_URL:-redis://redis:6379/0}
+      KFABRIC_RABBITMQ_URL: ${KFABRIC_RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672//}
+      KFABRIC_QDRANT_URL: ${KFABRIC_QDRANT_URL:-http://qdrant:6333}
+      KFABRIC_STORAGE_PATH: ${KFABRIC_STORAGE_PATH:-/app/storage}
+      KFABRIC_API_KEY: ${KFABRIC_API_KEY:-}
+      KFABRIC_ENABLE_MCP: ${KFABRIC_ENABLE_MCP:-true}
+      KFABRIC_ENABLE_METRICS: ${KFABRIC_ENABLE_METRICS:-true}
+      KFABRIC_SECURE_MODE: ${KFABRIC_SECURE_MODE:-true}
+      KFABRIC_REMOTE_DISCOVERY_ENABLED: ${KFABRIC_REMOTE_DISCOVERY_ENABLED:-false}
+      KFABRIC_REMOTE_COLLECTION_ENABLED: ${KFABRIC_REMOTE_COLLECTION_ENABLED:-false}
+      PYTHONDONTWRITEBYTECODE: "1"
     depends_on:
-      - postgres
-      - redis
-      - rabbitmq
-      - qdrant
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
     ports:
-      - "8001:8000"
+      - "${KFABRIC_API_PORT:-8001}:8000"
+    volumes:
+      - kfabric_storage:/app/storage
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/readiness').read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
 
   worker:
     build: .
-    command: celery -A kfabric.workers.celery_app.celery_app worker --loglevel=INFO
-    env_file:
-      - .env.example
+    command: ["kfabric-worker"]
     environment:
-      KFABRIC_DATABASE_URL: postgresql+psycopg://kfabric:kfabric@postgres:5432/kfabric
-      KFABRIC_REDIS_URL: redis://redis:6379/0
-      KFABRIC_RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672//
-      KFABRIC_QDRANT_URL: http://qdrant:6333
-      KFABRIC_STORAGE_PATH: /app/storage
+      KFABRIC_ENV: ${KFABRIC_ENV:-development}
+      KFABRIC_APP_NAME: ${KFABRIC_APP_NAME:-KFabric}
+      KFABRIC_DATABASE_URL: ${KFABRIC_DATABASE_URL:-postgresql+psycopg://kfabric:kfabric@postgres:5432/kfabric}
+      KFABRIC_REDIS_URL: ${KFABRIC_REDIS_URL:-redis://redis:6379/0}
+      KFABRIC_RABBITMQ_URL: ${KFABRIC_RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672//}
+      KFABRIC_QDRANT_URL: ${KFABRIC_QDRANT_URL:-http://qdrant:6333}
+      KFABRIC_STORAGE_PATH: ${KFABRIC_STORAGE_PATH:-/app/storage}
+      KFABRIC_API_KEY: ${KFABRIC_API_KEY:-}
+      KFABRIC_ENABLE_MCP: ${KFABRIC_ENABLE_MCP:-true}
+      KFABRIC_ENABLE_METRICS: ${KFABRIC_ENABLE_METRICS:-true}
+      KFABRIC_SECURE_MODE: ${KFABRIC_SECURE_MODE:-true}
+      PYTHONDONTWRITEBYTECODE: "1"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    volumes:
+      - kfabric_storage:/app/storage
+    restart: unless-stopped
 
 volumes:
   postgres_data:
   qdrant_data:
-
+  kfabric_storage:

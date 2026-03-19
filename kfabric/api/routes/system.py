@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
-from fastapi.responses import Response
+from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -9,9 +8,10 @@ from kfabric import __version__
 from kfabric.api.deps import get_db, get_runtime_settings, require_api_key
 from kfabric.api.serializers import serialize_audit_event, serialize_version
 from kfabric.config import AppSettings
-from kfabric.domain.schemas import AuditEventResponse, HealthResponse, VersionResponse
+from kfabric.domain.schemas import AuditEventResponse, HealthResponse, ReadinessResponse, VersionResponse
 from kfabric.infra.models import AuditEvent
 from kfabric.infra.observability import get_metrics_payload
+from kfabric.infra.runtime_checks import collect_runtime_status
 
 
 router = APIRouter(tags=["system"], dependencies=[Depends(require_api_key)])
@@ -20,6 +20,17 @@ router = APIRouter(tags=["system"], dependencies=[Depends(require_api_key)])
 @router.get("/health", response_model=HealthResponse)
 def health(settings: AppSettings = Depends(get_runtime_settings)) -> HealthResponse:
     return HealthResponse(status="ok", service=settings.app_name, version=__version__)
+
+
+@router.get("/readiness", response_model=ReadinessResponse)
+def readiness(
+    response: Response,
+    settings: AppSettings = Depends(get_runtime_settings),
+) -> ReadinessResponse:
+    payload = collect_runtime_status(settings)
+    if payload["status"] == "not_ready":
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return ReadinessResponse.model_validate(payload)
 
 
 @router.get("/version", response_model=VersionResponse)
