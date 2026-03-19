@@ -90,6 +90,118 @@ def test_discovery_uses_remote_connector_when_enabled(monkeypatch):
     assert "tracabilite" in candidates[0]["snippet"]
 
 
+def test_discovery_extracts_eurlex_specific_results(monkeypatch):
+    query = Query(
+        theme="Cosmetiques",
+        question="Quels textes europeens s'appliquent ?",
+        keywords=["cosmetique", "europe"],
+        preferred_domains=["eur-lex.europa.eu"],
+        language="fr",
+        expansion_text="cosmetique europe textes officiels",
+    )
+    settings = AppSettings(remote_discovery_enabled=True)
+
+    def fake_get(*args, **kwargs):
+        html = """
+        <html>
+          <body>
+            <div class="SearchResult">
+              <h2 class="SearchResult-title">
+                <a href="/legal-content/FR/TXT/?uri=CELEX:32009R1223">Reglement cosmetique 1223/2009</a>
+              </h2>
+              <div class="SearchResult-content">Texte consolide sur les obligations de mise sur le marche.</div>
+              <a href="/legal-content/FR/TXT/PDF/?uri=CELEX:32009R1223">PDF</a>
+            </div>
+          </body>
+        </html>
+        """
+        return httpx.Response(200, headers={"content-type": "text/html"}, text=html)
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    candidates = discover_candidates(query, settings=settings)
+
+    assert len(candidates) == 1
+    assert candidates[0]["source_url"] == "https://eur-lex.europa.eu/legal-content/FR/TXT/PDF/?uri=CELEX:32009R1223"
+    assert candidates[0]["document_type"] == "pdf"
+    assert candidates[0]["title"] == "Reglement cosmetique 1223/2009"
+    assert candidates[0]["domain"] == "eur-lex.europa.eu"
+
+
+def test_discovery_extracts_datagouv_specific_results(monkeypatch):
+    query = Query(
+        theme="Substances cosmetiques",
+        question="Quelles donnees publiques suivre ?",
+        keywords=["cosmetique", "donnees"],
+        preferred_domains=["data.gouv.fr"],
+        language="fr",
+        expansion_text="substances cosmetiques donnees publiques",
+    )
+    settings = AppSettings(remote_discovery_enabled=True)
+
+    def fake_get(*args, **kwargs):
+        html = """
+        <html>
+          <body>
+            <article class="card">
+              <h2 class="fr-card__title">
+                <a href="/fr/datasets/base-ingredients-cosmetiques/">Base ingredients cosmetiques</a>
+              </h2>
+              <p class="fr-card__desc">Jeu de donnees public sur les ingredients, metadonnees et references.</p>
+            </article>
+          </body>
+        </html>
+        """
+        return httpx.Response(200, headers={"content-type": "text/html"}, text=html)
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    candidates = discover_candidates(query, settings=settings)
+
+    assert len(candidates) == 1
+    assert candidates[0]["source_url"] == "https://www.data.gouv.fr/fr/datasets/base-ingredients-cosmetiques/"
+    assert candidates[0]["document_type"] == "web"
+    assert candidates[0]["title"] == "Base ingredients cosmetiques"
+    assert "metadonnees" in candidates[0]["snippet"]
+
+
+def test_discovery_extracts_hal_specific_results(monkeypatch):
+    query = Query(
+        theme="Evaluation toxicologique",
+        question="Quels travaux scientifiques recuperer ?",
+        keywords=["toxicologie", "evaluation"],
+        preferred_domains=["hal.science"],
+        language="fr",
+        expansion_text="evaluation toxicologique travaux scientifiques",
+    )
+    settings = AppSettings(remote_discovery_enabled=True)
+
+    def fake_get(*args, **kwargs):
+        html = """
+        <html>
+          <body>
+            <article class="result-item">
+              <h2 class="result-title"><a href="/hal-04777777v1">Evaluation toxicologique appliquee</a></h2>
+              <div class="result-authors">A. Martin, C. Dupont</div>
+              <div class="abstract">Resume scientifique sur les methodes de qualification et de preuve.</div>
+              <a href="/hal-04777777v1/document">PDF</a>
+            </article>
+          </body>
+        </html>
+        """
+        return httpx.Response(200, headers={"content-type": "text/html"}, text=html)
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    candidates = discover_candidates(query, settings=settings)
+
+    assert len(candidates) == 1
+    assert candidates[0]["source_url"] == "https://hal.science/hal-04777777v1/document"
+    assert candidates[0]["document_type"] == "pdf"
+    assert candidates[0]["title"] == "Evaluation toxicologique appliquee"
+    assert "Resume scientifique" in candidates[0]["snippet"]
+
+
 def test_collect_document_preserves_pdf_payload(monkeypatch):
     candidate = CandidateDocument(
         source_url="https://example.org/demo.pdf",
@@ -151,6 +263,105 @@ def test_parse_document_extracts_html_content():
     assert "Obligations 2024" in parsed["normalized_text"]
     assert "Etiquetage" in parsed["headings"]
     assert parsed["extraction_method"] in {"beautifulsoup", "readability", "trafilatura"}
+
+
+def test_parse_document_extracts_eurlex_specific_html():
+    candidate = CandidateDocument(
+        source_url="https://eur-lex.europa.eu/legal-content/FR/TXT/?uri=CELEX:32009R1223",
+        title="Titre fallback",
+        snippet="",
+        domain="eur-lex.europa.eu",
+        document_type="web",
+        language="fr",
+        discovery_rank=1,
+        discovery_source="test",
+    )
+    raw_html = """
+    <html>
+      <body>
+        <main>
+          <h1 class="eli-main-title">Reglement cosmetique 1223/2009</h1>
+          <dl class="eli-data">
+            <dt>CELEX</dt><dd>32009R1223</dd>
+            <dt>Date</dt><dd>30/11/2009</dd>
+          </dl>
+          <div id="text">
+            <h2>Article 1</h2>
+            <p>Le present reglement fixe les regles de mise sur le marche.</p>
+          </div>
+        </main>
+      </body>
+    </html>
+    """
+
+    parsed = parse_document(raw_html, "text/html", candidate)
+
+    assert parsed["extraction_method"] == "eurlex_html"
+    assert "CELEX: 32009R1223" in parsed["normalized_text"]
+    assert "Article 1" in parsed["normalized_text"]
+    assert parsed["extracted_title"] == "Reglement cosmetique 1223/2009"
+
+
+def test_parse_document_extracts_datagouv_specific_html():
+    candidate = CandidateDocument(
+        source_url="https://www.data.gouv.fr/fr/datasets/base-ingredients-cosmetiques/",
+        title="Titre fallback",
+        snippet="",
+        domain="data.gouv.fr",
+        document_type="web",
+        language="fr",
+        discovery_rank=1,
+        discovery_source="test",
+    )
+    raw_html = """
+    <html>
+      <body>
+        <main>
+          <h1>Base ingredients cosmetiques</h1>
+          <p class="fr-text--lead">Jeu de donnees de reference sur les ingredients.</p>
+          <section class="resource-card"><a href="/fr/datasets/r/fiche-technique.pdf">Fiche technique PDF</a></section>
+        </main>
+      </body>
+    </html>
+    """
+
+    parsed = parse_document(raw_html, "text/html", candidate)
+
+    assert parsed["extraction_method"] == "datagouv_html"
+    assert "Jeu de donnees de reference" in parsed["normalized_text"]
+    assert "Ressources : Fiche technique PDF" in parsed["normalized_text"]
+    assert parsed["extracted_title"] == "Base ingredients cosmetiques"
+
+
+def test_parse_document_extracts_hal_specific_html():
+    candidate = CandidateDocument(
+        source_url="https://hal.science/hal-04777777v1",
+        title="Titre fallback",
+        snippet="",
+        domain="hal.science",
+        document_type="web",
+        language="fr",
+        discovery_rank=1,
+        discovery_source="test",
+    )
+    raw_html = """
+    <html>
+      <body>
+        <main class="Page-content">
+          <h1 class="Page-title">Evaluation toxicologique appliquee</h1>
+          <div class="authors">A. Martin, C. Dupont</div>
+          <div class="abstract">Analyse des criteres de preuve et du protocole experimental.</div>
+        </main>
+      </body>
+    </html>
+    """
+
+    parsed = parse_document(raw_html, "text/html", candidate)
+
+    assert parsed["extraction_method"] == "hal_html"
+    assert "Auteurs : A. Martin, C. Dupont" in parsed["normalized_text"]
+    assert "Resume : Analyse des criteres de preuve" in parsed["normalized_text"]
+    assert parsed["extracted_title"] == "Evaluation toxicologique appliquee"
 
 
 def test_parse_document_extracts_pdf_text():

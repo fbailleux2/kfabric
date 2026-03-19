@@ -128,6 +128,10 @@ def _parse_html_document(raw_content: str, candidate: CandidateDocument) -> tupl
     extracted_title = soup.title.string.strip() if soup.title and soup.title.string else candidate.title
     headings = _extract_html_headings(soup)
 
+    source_specific = _parse_source_specific_html(soup, candidate, extracted_title)
+    if source_specific is not None:
+        return source_specific
+
     if trafilatura is not None:
         try:
             extracted = trafilatura.extract(
@@ -207,3 +211,140 @@ def _normalize_text(text: str) -> str:
 def _looks_like_html(raw_content: str) -> bool:
     sample = raw_content[:512].lower()
     return "<html" in sample or "<body" in sample or "<article" in sample or "<main" in sample
+
+
+def _parse_source_specific_html(
+    soup: BeautifulSoup,
+    candidate: CandidateDocument,
+    fallback_title: str,
+) -> tuple[str, str, list[str], str] | None:
+    domain = candidate.domain.lower()
+    if domain == "eur-lex.europa.eu":
+        return _parse_eurlex_html(soup, fallback_title)
+    if domain == "data.gouv.fr":
+        return _parse_datagouv_html(soup, fallback_title)
+    if domain == "hal.science":
+        return _parse_hal_html(soup, fallback_title)
+    return None
+
+
+def _parse_eurlex_html(soup: BeautifulSoup, fallback_title: str) -> tuple[str, str, list[str], str] | None:
+    title = _text_from_selectors(
+        soup,
+        (
+            ".eli-main-title",
+            ".oj-doc-ti",
+            ".doc-ti",
+            "h1",
+        ),
+    ) or fallback_title
+    scope = soup.select_one("#text, #docHtml, main, article")
+    if scope is None:
+        return None
+
+    metadata = _collect_metadata_pairs(
+        soup,
+        (".eli-data dt", ".eli-metadata dt", "dl dt"),
+        (".eli-data dd", ".eli-metadata dd", "dl dd"),
+    )
+    text_parts = [title, *metadata]
+    body_text = scope.get_text("\n", strip=True)
+    if body_text:
+        text_parts.append(body_text)
+    headings = _extract_html_headings(scope if isinstance(scope, BeautifulSoup) else soup)
+    return title, "\n\n".join(part for part in text_parts if part), headings, "eurlex_html"
+
+
+def _parse_datagouv_html(soup: BeautifulSoup, fallback_title: str) -> tuple[str, str, list[str], str] | None:
+    title = _text_from_selectors(
+        soup,
+        (
+            "[data-testid='dataset-title']",
+            ".fr-card__title",
+            "main h1",
+            "h1",
+        ),
+    ) or fallback_title
+    scope = soup.select_one("main, article, .fr-container")
+    if scope is None:
+        return None
+
+    lead = _text_from_selectors(scope, (".fr-text--lead", ".dataset-description", "p"))
+    resource_labels = _collect_link_labels(scope, (".resource-card a[href]", ".fr-card a[href]", ".fr-btn[href]"))
+    text_parts = [title]
+    if lead:
+        text_parts.append(lead)
+    if resource_labels:
+        text_parts.append("Ressources : " + ", ".join(resource_labels[:6]))
+    text_parts.append(scope.get_text("\n", strip=True))
+    headings = _extract_html_headings(scope if isinstance(scope, BeautifulSoup) else soup)
+    return title, "\n\n".join(part for part in text_parts if part), headings, "datagouv_html"
+
+
+def _parse_hal_html(soup: BeautifulSoup, fallback_title: str) -> tuple[str, str, list[str], str] | None:
+    title = _text_from_selectors(
+        soup,
+        (
+            ".result-title",
+            ".Page-title",
+            "main h1",
+            "h1",
+        ),
+    ) or fallback_title
+    scope = soup.select_one("main, article, .content, .Page-content")
+    if scope is None:
+        return None
+
+    abstract = _text_from_selectors(scope, (".abstract", "#abstract", ".description", "p"))
+    authors = _text_from_selectors(scope, (".authors", ".result-authors", ".notice-authors"))
+    text_parts = [title]
+    if authors:
+        text_parts.append("Auteurs : " + authors)
+    if abstract:
+        text_parts.append("Resume : " + abstract)
+    text_parts.append(scope.get_text("\n", strip=True))
+    headings = _extract_html_headings(scope if isinstance(scope, BeautifulSoup) else soup)
+    return title, "\n\n".join(part for part in text_parts if part), headings, "hal_html"
+
+
+def _text_from_selectors(node: BeautifulSoup, selectors: tuple[str, ...]) -> str:
+    for selector in selectors:
+        tag = node.select_one(selector)
+        if tag:
+            text = tag.get_text(" ", strip=True)
+            if text:
+                return text
+    return ""
+
+
+def _collect_metadata_pairs(
+    node: BeautifulSoup,
+    dt_selectors: tuple[str, ...],
+    dd_selectors: tuple[str, ...],
+) -> list[str]:
+    dt_tags = _select_many(node, dt_selectors)
+    dd_tags = _select_many(node, dd_selectors)
+    metadata: list[str] = []
+    for dt_tag, dd_tag in zip(dt_tags, dd_tags, strict=False):
+        dt_text = dt_tag.get_text(" ", strip=True)
+        dd_text = dd_tag.get_text(" ", strip=True)
+        if dt_text and dd_text:
+            metadata.append(f"{dt_text}: {dd_text}")
+    return metadata[:8]
+
+
+def _collect_link_labels(node: BeautifulSoup, selectors: tuple[str, ...]) -> list[str]:
+    labels: list[str] = []
+    for selector in selectors:
+        for tag in node.select(selector):
+            text = tag.get_text(" ", strip=True)
+            if text and text not in labels:
+                labels.append(text)
+    return labels
+
+
+def _select_many(node: BeautifulSoup, selectors: tuple[str, ...]) -> list[BeautifulSoup]:
+    selected: list[BeautifulSoup] = []
+    for selector in selectors:
+        selected.extend(node.select(selector))
+    return selected

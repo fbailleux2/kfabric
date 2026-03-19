@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import quote_plus, urljoin, urlparse
 
@@ -249,6 +250,10 @@ def _discover_remote_candidates(
 
 def _extract_result_cards(raw_html: str, base_url: str, profile: DiscoveryProfile) -> list[dict[str, str]]:
     soup = BeautifulSoup(raw_html, "html.parser")
+    specialized_results = _extract_specialized_results(soup, base_url, profile)
+    if specialized_results:
+        return specialized_results
+
     result_nodes = _select_result_nodes(soup, profile.result_selectors)
     extracted: list[dict[str, str]] = []
     seen_urls: set[str] = set()
@@ -279,6 +284,13 @@ def _extract_result_cards(raw_html: str, base_url: str, profile: DiscoveryProfil
         )
 
     return extracted
+
+
+def _extract_specialized_results(soup: BeautifulSoup, base_url: str, profile: DiscoveryProfile) -> list[dict[str, str]]:
+    extractor = DOMAIN_RESULT_EXTRACTORS.get(profile.domain)
+    if extractor is None:
+        return []
+    return extractor(soup, base_url, profile)
 
 
 def _select_result_nodes(soup: BeautifulSoup, selectors: tuple[str, ...]) -> list[BeautifulSoup]:
@@ -344,3 +356,184 @@ def _infer_document_type(source_url: str, title: str, snippet: str, fallback_typ
 
 def _normalize_domain(netloc: str) -> str:
     return netloc.lower().removeprefix("www.")
+
+
+def _extract_eurlex_results(soup: BeautifulSoup, base_url: str, profile: DiscoveryProfile) -> list[dict[str, str]]:
+    nodes = _select_result_nodes(soup, profile.result_selectors)
+    extracted: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+
+    for node in nodes:
+        main_link = node.select_one("a[href*='/legal-content/'], a[href*='uri=CELEX']")
+        pdf_link = node.select_one("a[href*='/TXT/PDF/'], a[href$='.pdf']")
+        chosen_link = pdf_link or main_link or node.select_one("a[href]")
+        if chosen_link is None:
+            continue
+
+        href = (chosen_link.get("href") or "").strip()
+        if not _is_candidate_href(href):
+            continue
+
+        absolute_url = urljoin(base_url, href)
+        if absolute_url in seen_urls:
+            continue
+
+        title = _extract_title(node, main_link or chosen_link)
+        if not title:
+            continue
+
+        snippet = _join_text_snippets(
+            node,
+            (
+                ".SearchResult-content",
+                ".result-content",
+                ".SearchResult-attributes",
+                "p",
+                "li",
+            ),
+        ) or profile.snippet_hint
+
+        extracted.append(
+            _build_remote_result(
+                source_url=absolute_url,
+                title=title,
+                snippet=snippet,
+                fallback_type="pdf" if pdf_link is not None else profile.document_type,
+                domain=profile.domain,
+            )
+        )
+        seen_urls.add(absolute_url)
+
+    return extracted
+
+
+def _extract_datagouv_results(soup: BeautifulSoup, base_url: str, profile: DiscoveryProfile) -> list[dict[str, str]]:
+    nodes = _select_result_nodes(soup, profile.result_selectors)
+    extracted: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+
+    for node in nodes:
+        main_link = node.select_one("a[href*='/datasets/'], a[href*='/reuses/'], a[href]")
+        if main_link is None:
+            continue
+
+        href = (main_link.get("href") or "").strip()
+        if not _is_candidate_href(href):
+            continue
+
+        absolute_url = urljoin(base_url, href)
+        if absolute_url in seen_urls:
+            continue
+
+        title = _extract_title(node, main_link)
+        if not title:
+            continue
+
+        snippet = _join_text_snippets(
+            node,
+            (
+                ".fr-card__desc",
+                ".dataset-description",
+                ".card-text",
+                ".result__summary",
+                "p",
+            ),
+        ) or profile.snippet_hint
+
+        extracted.append(
+            _build_remote_result(
+                source_url=absolute_url,
+                title=title,
+                snippet=snippet,
+                fallback_type=profile.document_type,
+                domain=profile.domain,
+            )
+        )
+        seen_urls.add(absolute_url)
+
+    return extracted
+
+
+def _extract_hal_results(soup: BeautifulSoup, base_url: str, profile: DiscoveryProfile) -> list[dict[str, str]]:
+    nodes = _select_result_nodes(soup, profile.result_selectors)
+    extracted: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+
+    for node in nodes:
+        abstract_link = node.select_one("a[href*='/hal-'], a[href*='hal.science/hal-']")
+        pdf_link = node.select_one("a[href$='/document'], a[href$='.pdf'], a[href*='/document?']")
+        chosen_link = pdf_link or abstract_link or node.select_one("a[href]")
+        if chosen_link is None:
+            continue
+
+        href = (chosen_link.get("href") or "").strip()
+        if not _is_candidate_href(href):
+            continue
+
+        absolute_url = urljoin(base_url, href)
+        if absolute_url in seen_urls:
+            continue
+
+        title = _extract_title(node, abstract_link or chosen_link)
+        if not title:
+            continue
+
+        snippet = _join_text_snippets(
+            node,
+            (
+                ".abstract",
+                ".description",
+                ".result-authors",
+                "p",
+            ),
+        ) or profile.snippet_hint
+
+        extracted.append(
+            _build_remote_result(
+                source_url=absolute_url,
+                title=title,
+                snippet=snippet,
+                fallback_type="pdf" if pdf_link is not None else profile.document_type,
+                domain=profile.domain,
+            )
+        )
+        seen_urls.add(absolute_url)
+
+    return extracted
+
+
+def _build_remote_result(
+    *,
+    source_url: str,
+    title: str,
+    snippet: str,
+    fallback_type: str,
+    domain: str,
+) -> dict[str, str]:
+    normalized_domain = _normalize_domain(urlparse(source_url).netloc or domain)
+    clean_title = re.sub(r"\s{2,}", " ", title).strip()
+    clean_snippet = re.sub(r"\s{2,}", " ", snippet).strip()[:420]
+    return {
+        "source_url": source_url,
+        "title": clean_title,
+        "snippet": clean_snippet,
+        "domain": normalized_domain,
+        "document_type": _infer_document_type(source_url, clean_title, clean_snippet, fallback_type),
+    }
+
+
+def _join_text_snippets(node: BeautifulSoup, selectors: tuple[str, ...]) -> str:
+    snippets: list[str] = []
+    for selector in selectors:
+        for tag in node.select(selector):
+            text = tag.get_text(" ", strip=True)
+            if text and text not in snippets:
+                snippets.append(text)
+    return " ".join(snippets[:3])
+
+
+DOMAIN_RESULT_EXTRACTORS: dict[str, Callable[[BeautifulSoup, str, DiscoveryProfile], list[dict[str, str]]]] = {
+    "eur-lex.europa.eu": _extract_eurlex_results,
+    "data.gouv.fr": _extract_datagouv_results,
+    "hal.science": _extract_hal_results,
+}
