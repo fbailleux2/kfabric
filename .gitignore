@@ -1,6 +1,9 @@
 .venv/
 __pycache__/
 *.pyc
+.env
+.env.*
+!.env.example
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -10,6 +13,10 @@ dist/
 build/
 *.egg-info/
 .DS_Store
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
 storage/
 kfabric.db
-
