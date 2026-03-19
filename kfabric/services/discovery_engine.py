@@ -56,7 +56,7 @@ DISCOVERY_PROFILES = {
         search_url_template="https://www.service-public.fr/particuliers/recherche?keyword={query}",
         title_suffix="Recherche Service-Public",
         snippet_hint="Information administrative francaise utile pour obligations declaratives et demarches.",
-        result_selectors=(".fr-card", ".search-result", "article", "main li"),
+        result_selectors=(".fr-search-result", ".fr-card", ".search-result", "article", "main li"),
     ),
     "data.gouv.fr": DiscoveryProfile(
         domain="data.gouv.fr",
@@ -70,7 +70,7 @@ DISCOVERY_PROFILES = {
         search_url_template="https://www.legifrance.gouv.fr/search/all?query={query}",
         title_suffix="Recherche Legifrance",
         snippet_hint="Source normative francaise pour textes consolides et references juridiques officielles.",
-        result_selectors=(".search-results__item", ".result", "article", "main li"),
+        result_selectors=(".search-results__item", ".result", ".list-result", "article", "main li"),
     ),
     "hal.science": DiscoveryProfile(
         domain="hal.science",
@@ -502,6 +502,105 @@ def _extract_hal_results(soup: BeautifulSoup, base_url: str, profile: DiscoveryP
     return extracted
 
 
+def _extract_legifrance_results(soup: BeautifulSoup, base_url: str, profile: DiscoveryProfile) -> list[dict[str, str]]:
+    nodes = _select_result_nodes(soup, profile.result_selectors)
+    extracted: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+
+    for node in nodes:
+        main_link = node.select_one(
+            "a[href*='/jorf/id/'], a[href*='/codes/article_lc/'], a[href*='/loda/id/'], a[href]"
+        )
+        pdf_link = node.select_one("a[href$='.pdf'], a[href*='/download/pdf/']")
+        chosen_link = pdf_link or main_link
+        if chosen_link is None:
+            continue
+
+        href = (chosen_link.get('href') or '').strip()
+        if not _is_candidate_href(href):
+            continue
+
+        absolute_url = urljoin(base_url, href)
+        if absolute_url in seen_urls:
+            continue
+
+        title = _extract_title(node, main_link or chosen_link)
+        if not title:
+            continue
+
+        snippet = _join_text_snippets(
+            node,
+            (
+                ".search-results__content",
+                ".list-result-item__content",
+                ".result-content",
+                ".list-result-item__nature",
+                "p",
+            ),
+        ) or profile.snippet_hint
+
+        extracted.append(
+            _build_remote_result(
+                source_url=absolute_url,
+                title=title,
+                snippet=snippet,
+                fallback_type='pdf' if pdf_link is not None else profile.document_type,
+                domain=profile.domain,
+            )
+        )
+        seen_urls.add(absolute_url)
+
+    return extracted
+
+
+def _extract_servicepublic_results(soup: BeautifulSoup, base_url: str, profile: DiscoveryProfile) -> list[dict[str, str]]:
+    nodes = _select_result_nodes(soup, profile.result_selectors)
+    extracted: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+
+    for node in nodes:
+        main_link = node.select_one("a[href*='/particuliers/'], a[href*='/professionnels-entreprises/'], a[href]")
+        pdf_link = node.select_one("a[href$='.pdf']")
+        chosen_link = pdf_link or main_link
+        if chosen_link is None:
+            continue
+
+        href = (chosen_link.get('href') or '').strip()
+        if not _is_candidate_href(href):
+            continue
+
+        absolute_url = urljoin(base_url, href)
+        if absolute_url in seen_urls:
+            continue
+
+        title = _extract_title(node, main_link or chosen_link)
+        if not title:
+            continue
+
+        snippet = _join_text_snippets(
+            node,
+            (
+                ".fr-card__desc",
+                ".search-result__description",
+                ".fr-text--sm",
+                "p",
+            ),
+        ) or profile.snippet_hint
+
+        extracted.append(
+            _build_remote_result(
+                source_url=absolute_url,
+                title=title,
+                snippet=snippet,
+                fallback_type='pdf' if pdf_link is not None else profile.document_type,
+                domain=profile.domain,
+            )
+        )
+        seen_urls.add(absolute_url)
+
+    return extracted
+
+
 def _build_remote_result(
     *,
     source_url: str,
@@ -535,5 +634,7 @@ def _join_text_snippets(node: BeautifulSoup, selectors: tuple[str, ...]) -> str:
 DOMAIN_RESULT_EXTRACTORS: dict[str, Callable[[BeautifulSoup, str, DiscoveryProfile], list[dict[str, str]]]] = {
     "eur-lex.europa.eu": _extract_eurlex_results,
     "data.gouv.fr": _extract_datagouv_results,
+    "legifrance.gouv.fr": _extract_legifrance_results,
     "hal.science": _extract_hal_results,
+    "service-public.fr": _extract_servicepublic_results,
 }

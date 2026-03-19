@@ -223,8 +223,12 @@ def _parse_source_specific_html(
         return _parse_eurlex_html(soup, fallback_title)
     if domain == "data.gouv.fr":
         return _parse_datagouv_html(soup, fallback_title)
+    if domain == "legifrance.gouv.fr":
+        return _parse_legifrance_html(soup, fallback_title)
     if domain == "hal.science":
         return _parse_hal_html(soup, fallback_title)
+    if domain == "service-public.fr":
+        return _parse_servicepublic_html(soup, fallback_title)
     return None
 
 
@@ -305,6 +309,60 @@ def _parse_hal_html(soup: BeautifulSoup, fallback_title: str) -> tuple[str, str,
     text_parts.append(scope.get_text("\n", strip=True))
     headings = _extract_html_headings(scope if isinstance(scope, BeautifulSoup) else soup)
     return title, "\n\n".join(part for part in text_parts if part), headings, "hal_html"
+
+
+def _parse_legifrance_html(soup: BeautifulSoup, fallback_title: str) -> tuple[str, str, list[str], str] | None:
+    title = _text_from_selectors(
+        soup,
+        (
+            ".title-page",
+            ".titreTexte",
+            "main h1",
+            "h1",
+        ),
+    ) or fallback_title
+    scope = soup.select_one("main, article, .texte, .content")
+    if scope is None:
+        return None
+
+    metadata = _collect_metadata_pairs(
+        scope,
+        (".list-inline dt", ".metadata dt", "dl dt"),
+        (".list-inline dd", ".metadata dd", "dl dd"),
+    )
+    body = _text_from_selectors(scope, (".article-body", ".content-text", ".texte", "p"))
+    text_parts = [title, *metadata]
+    if body:
+        text_parts.append(body)
+    text_parts.append(scope.get_text("\n", strip=True))
+    headings = _extract_html_headings(scope if isinstance(scope, BeautifulSoup) else soup)
+    return title, "\n\n".join(part for part in text_parts if part), headings, "legifrance_html"
+
+
+def _parse_servicepublic_html(soup: BeautifulSoup, fallback_title: str) -> tuple[str, str, list[str], str] | None:
+    title = _text_from_selectors(
+        soup,
+        (
+            ".page-title",
+            ".fr-h1",
+            "main h1",
+            "h1",
+        ),
+    ) or fallback_title
+    scope = soup.select_one("main, article, .sp-content, .fr-container")
+    if scope is None:
+        return None
+
+    lead = _text_from_selectors(scope, (".introduction", ".fr-text--lead", ".chapo", "p"))
+    useful_links = _collect_link_labels(scope, (".fr-callout a[href]", ".fr-card a[href]", ".fr-link[href]"))
+    text_parts = [title]
+    if lead:
+        text_parts.append(lead)
+    if useful_links:
+        text_parts.append("Ressources utiles : " + ", ".join(useful_links[:6]))
+    text_parts.append(scope.get_text("\n", strip=True))
+    headings = _extract_html_headings(scope if isinstance(scope, BeautifulSoup) else soup)
+    return title, "\n\n".join(part for part in text_parts if part), headings, "servicepublic_html"
 
 
 def _text_from_selectors(node: BeautifulSoup, selectors: tuple[str, ...]) -> str:

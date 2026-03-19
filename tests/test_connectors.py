@@ -202,6 +202,78 @@ def test_discovery_extracts_hal_specific_results(monkeypatch):
     assert "Resume scientifique" in candidates[0]["snippet"]
 
 
+def test_discovery_extracts_legifrance_specific_results(monkeypatch):
+    query = Query(
+        theme="Savon artisanal",
+        question="Quels textes francais s'appliquent ?",
+        keywords=["savon", "france"],
+        preferred_domains=["legifrance.gouv.fr"],
+        language="fr",
+        expansion_text="savon artisanal textes francais",
+    )
+    settings = AppSettings(remote_discovery_enabled=True)
+
+    def fake_get(*args, **kwargs):
+        html = """
+        <html>
+          <body>
+            <div class="search-results__item">
+              <h2><a href="/jorf/id/JORFTEXT000000111111">Arrete relatif a la fabrication artisanale</a></h2>
+              <p class="search-results__content">Texte reglementaire sur la fabrication, l'etiquetage et la tracabilite.</p>
+            </div>
+          </body>
+        </html>
+        """
+        return httpx.Response(200, headers={"content-type": "text/html"}, text=html)
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    candidates = discover_candidates(query, settings=settings)
+
+    assert len(candidates) == 1
+    assert candidates[0]["source_url"] == "https://www.legifrance.gouv.fr/jorf/id/JORFTEXT000000111111"
+    assert candidates[0]["document_type"] == "web"
+    assert candidates[0]["title"] == "Arrete relatif a la fabrication artisanale"
+    assert "tracabilite" in candidates[0]["snippet"]
+
+
+def test_discovery_extracts_servicepublic_specific_results(monkeypatch):
+    query = Query(
+        theme="Formalites cosmetiques",
+        question="Quelles demarches administratives suivre ?",
+        keywords=["cosmetique", "demarches"],
+        preferred_domains=["service-public.fr"],
+        language="fr",
+        expansion_text="formalites cosmetiques demarches administratives",
+    )
+    settings = AppSettings(remote_discovery_enabled=True)
+
+    def fake_get(*args, **kwargs):
+        html = """
+        <html>
+          <body>
+            <article class="fr-card">
+              <h2 class="fr-card__title">
+                <a href="/particuliers/vosdroits/F35732">Demarches pour la mise sur le marche</a>
+              </h2>
+              <p class="fr-card__desc">Guide administratif sur les obligations, formulaires et pieces a conserver.</p>
+            </article>
+          </body>
+        </html>
+        """
+        return httpx.Response(200, headers={"content-type": "text/html"}, text=html)
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    candidates = discover_candidates(query, settings=settings)
+
+    assert len(candidates) == 1
+    assert candidates[0]["source_url"] == "https://www.service-public.fr/particuliers/vosdroits/F35732"
+    assert candidates[0]["document_type"] == "web"
+    assert candidates[0]["title"] == "Demarches pour la mise sur le marche"
+    assert "formulaires" in candidates[0]["snippet"]
+
+
 def test_collect_document_preserves_pdf_payload(monkeypatch):
     candidate = CandidateDocument(
         source_url="https://example.org/demo.pdf",
@@ -362,6 +434,73 @@ def test_parse_document_extracts_hal_specific_html():
     assert "Auteurs : A. Martin, C. Dupont" in parsed["normalized_text"]
     assert "Resume : Analyse des criteres de preuve" in parsed["normalized_text"]
     assert parsed["extracted_title"] == "Evaluation toxicologique appliquee"
+
+
+def test_parse_document_extracts_legifrance_specific_html():
+    candidate = CandidateDocument(
+        source_url="https://www.legifrance.gouv.fr/jorf/id/JORFTEXT000000111111",
+        title="Titre fallback",
+        snippet="",
+        domain="legifrance.gouv.fr",
+        document_type="web",
+        language="fr",
+        discovery_rank=1,
+        discovery_source="test",
+    )
+    raw_html = """
+    <html>
+      <body>
+        <main>
+          <h1 class="title-page">Arrete relatif a la fabrication artisanale</h1>
+          <dl class="metadata">
+            <dt>NOR</dt><dd>ECOI0000001A</dd>
+            <dt>Date</dt><dd>12/03/2024</dd>
+          </dl>
+          <div class="article-body">
+            Le texte fixe les regles d'etiquetage, de securite et de conservation des preuves.
+          </div>
+        </main>
+      </body>
+    </html>
+    """
+
+    parsed = parse_document(raw_html, "text/html", candidate)
+
+    assert parsed["extraction_method"] == "legifrance_html"
+    assert "NOR: ECOI0000001A" in parsed["normalized_text"]
+    assert "regles d'etiquetage" in parsed["normalized_text"]
+    assert parsed["extracted_title"] == "Arrete relatif a la fabrication artisanale"
+
+
+def test_parse_document_extracts_servicepublic_specific_html():
+    candidate = CandidateDocument(
+        source_url="https://www.service-public.fr/particuliers/vosdroits/F35732",
+        title="Titre fallback",
+        snippet="",
+        domain="service-public.fr",
+        document_type="web",
+        language="fr",
+        discovery_rank=1,
+        discovery_source="test",
+    )
+    raw_html = """
+    <html>
+      <body>
+        <main class="sp-content">
+          <h1 class="page-title">Demarches pour la mise sur le marche</h1>
+          <p class="introduction">Cette fiche precise les obligations administratives et les justificatifs attendus.</p>
+          <div class="fr-callout"><a href="/simulateur/calcul">Acceder au simulateur</a></div>
+        </main>
+      </body>
+    </html>
+    """
+
+    parsed = parse_document(raw_html, "text/html", candidate)
+
+    assert parsed["extraction_method"] == "servicepublic_html"
+    assert "obligations administratives" in parsed["normalized_text"]
+    assert "Ressources utiles : Acceder au simulateur" in parsed["normalized_text"]
+    assert parsed["extracted_title"] == "Demarches pour la mise sur le marche"
 
 
 def test_parse_document_extracts_pdf_text():
