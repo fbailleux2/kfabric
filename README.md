@@ -99,6 +99,41 @@ L'application démarre ensuite sur :
 - UI : `http://127.0.0.1:8000/`
 - API : `http://127.0.0.1:8000/docs`
 
+## Démo produit
+
+Deux scénarios de démonstration reproductibles sont fournis dans
+[`docs/demo-scenarios.md`](docs/demo-scenarios.md).
+
+Génération rapide :
+
+```bash
+export KFABRIC_DATABASE_URL="sqlite:////tmp/kfabric-demo.db"
+export KFABRIC_STORAGE_PATH="/tmp/kfabric-demo-storage"
+./.venv/bin/python scripts/generate_demo_scenarios.py \
+  --base-url "http://127.0.0.1:8010" \
+  --output /tmp/kfabric-demo-manifest.json
+```
+
+Les captures de démonstration peuvent ensuite être générées depuis l’UI locale,
+et les corpus sont exportables en HTML et en Markdown.
+
+## Aperçu visuel
+
+Page d'accueil avec les requêtes récentes :
+
+![Accueil KFabric](docs/images/demo/home.png)
+
+Workflow corpus-first sur le scénario "savon Europe" :
+
+![Tableau de bord KFabric - savon Europe](docs/images/demo/savon-dashboard.png)
+
+Export HTML prêt pour une démo ou une revue documentaire :
+
+![Export corpus KFabric - savon Europe](docs/images/demo/savon-export.png)
+
+La galerie complète des scénarios validés est disponible dans
+[`docs/demo-scenarios.md`](docs/demo-scenarios.md).
+
 ## Vérification locale
 
 Les tests principaux peuvent être lancés avec :
