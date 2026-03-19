@@ -29,6 +29,7 @@ from kfabric.infra.models import (
     SalvagedFragment,
 )
 from kfabric.services.audit_trail import record_audit_event
+from kfabric.services.auth_service import AuthContext, build_visibility_clause, can_access_query
 from kfabric.services.corpus_builder import build_corpus_markdown
 from kfabric.services.deduplication import cluster_fragments
 from kfabric.services.discovery_engine import discover_candidates
@@ -46,10 +47,12 @@ from kfabric.services.rag_prep import prepare_index_artifact
 class Orchestrator:
     session: Session
     settings: AppSettings
+    principal: AuthContext | None = None
 
     def create_query(self, payload: QueryCreate) -> Query:
         expansion = expand_query(payload.theme, payload.question, payload.keywords)
         query = Query(
+            owner_user_id=self.principal.user_id if self.principal and self.principal.user_id else None,
             theme=payload.theme,
             question=payload.question,
             keywords=payload.keywords,
@@ -78,6 +81,7 @@ class Orchestrator:
             entity_id=query.id,
             trace_id=query.trace_id,
             payload={"keywords": payload.keywords},
+            actor=self._actor_label,
         )
         self.session.commit()
         self.session.refresh(query)
@@ -87,7 +91,15 @@ class Orchestrator:
         query = self.session.get(Query, query_id)
         if not query:
             raise ValueError(f"Query {query_id} not found")
+        self._ensure_query_access(query)
         return query
+
+    def list_recent_queries(self, limit: int = 8) -> list[Query]:
+        stmt = select(Query).order_by(Query.created_at.desc()).limit(limit)
+        visibility_clause = build_visibility_clause(self.principal or AuthContext())
+        if visibility_clause is not None:
+            stmt = stmt.where(visibility_clause)
+        return list(self.session.scalars(stmt))
 
     def discover(self, query_id: str) -> list[CandidateDocument]:
         query = self.get_query(query_id)
@@ -104,12 +116,18 @@ class Orchestrator:
             entity_id=query.id,
             trace_id=query.trace_id,
             payload={"candidate_count": len(created_candidates)},
+            actor=self._actor_label,
         )
         self.session.commit()
         return created_candidates
 
     def list_candidates(self, query_id: str) -> list[CandidateDocument]:
-        return list(self.session.scalars(select(CandidateDocument).where(CandidateDocument.query_id == query_id).order_by(CandidateDocument.discovery_rank)))
+        self.get_query(query_id)
+        return list(
+            self.session.scalars(
+                select(CandidateDocument).where(CandidateDocument.query_id == query_id).order_by(CandidateDocument.discovery_rank)
+            )
+        )
 
     def collect_candidate(self, candidate_id: str) -> CollectedDocument:
         candidate = self.session.get(CandidateDocument, candidate_id)
@@ -118,6 +136,7 @@ class Orchestrator:
         query = self.session.get(Query, candidate.query_id)
         if not query:
             raise ValueError(f"Query {candidate.query_id} not found")
+        self._ensure_query_access(query)
         payload = collect_document(candidate, query, self.settings)
         collected = CollectedDocument(candidate_id=candidate.id, **payload)
         self.session.add(collected)
@@ -130,6 +149,7 @@ class Orchestrator:
             entity_id=candidate.id,
             trace_id=collected.trace_id,
             payload={"collection_method": collected.collection_method},
+            actor=self._actor_label,
         )
         self.session.commit()
         self.session.refresh(collected)
@@ -141,6 +161,7 @@ class Orchestrator:
             raise ValueError(f"Collected document {document_id} not found")
         candidate = collected.candidate
         query = candidate.query
+        self._ensure_query_access(query)
         parsed_payload = parse_document(collected.raw_content, collected.content_type, candidate)
         parsed = ParsedDocument(collected_document_id=collected.id, **parsed_payload)
         self.session.add(parsed)
@@ -186,6 +207,7 @@ class Orchestrator:
                 "global_score": score.global_score,
                 "fragments": len(saved_fragments),
             },
+            actor=self._actor_label,
         )
         self.session.commit()
         return {
@@ -199,6 +221,7 @@ class Orchestrator:
         parsed = self.session.get(ParsedDocument, parsed_document_id)
         if not parsed or not parsed.decision:
             raise ValueError(f"Parsed document {parsed_document_id} not found")
+        self._ensure_query_access(parsed.collected_document.candidate.query)
         parsed.decision.status = (
             DocumentDecisionStatus.MANUAL_ACCEPTED.value if accepted else DocumentDecisionStatus.MANUAL_REJECTED.value
         )
@@ -210,6 +233,7 @@ class Orchestrator:
             entity_id=parsed.id,
             trace_id=parsed.trace_id,
             payload={"accepted": accepted},
+            actor=self._actor_label,
         )
         self.session.commit()
         self.session.refresh(parsed.decision)
@@ -218,7 +242,12 @@ class Orchestrator:
     def list_fragments(self, query_id: str | None = None) -> list[SalvagedFragment]:
         stmt = select(SalvagedFragment)
         if query_id:
+            self.get_query(query_id)
             stmt = stmt.where(SalvagedFragment.query_id == query_id)
+        else:
+            visibility_clause = build_visibility_clause(self.principal or AuthContext())
+            if visibility_clause is not None:
+                stmt = stmt.join(Query, Query.id == SalvagedFragment.query_id).where(visibility_clause)
         return list(self.session.scalars(stmt.order_by(SalvagedFragment.created_at.desc())))
 
     def consolidate_fragments(self, query_id: str) -> list[FragmentCluster]:
@@ -276,6 +305,7 @@ class Orchestrator:
             entity_id=query.id,
             trace_id=query.trace_id,
             payload={"cluster_count": len(created_clusters)},
+            actor=self._actor_label,
         )
         self.session.commit()
         return created_clusters
@@ -322,6 +352,7 @@ class Orchestrator:
             entity_id=query.id,
             trace_id=query.trace_id,
             payload={"fragment_count": len(fragments)},
+            actor=self._actor_label,
         )
         self.session.commit()
         self.session.refresh(synthesis)
@@ -403,15 +434,14 @@ class Orchestrator:
             entity_id=query.id,
             trace_id=query.trace_id,
             payload={"accepted_documents": len(accepted_ids), "syntheses": len(syntheses)},
+            actor=self._actor_label,
         )
         self.session.commit()
         self.session.refresh(corpus)
         return corpus
 
     def prepare_index(self, corpus_id: str) -> dict[str, Any]:
-        corpus = self.session.get(Corpus, corpus_id)
-        if not corpus:
-            raise ValueError(f"Corpus {corpus_id} not found")
+        corpus = self.get_corpus(corpus_id)
         result = prepare_index_artifact(corpus.id, corpus.corpus_markdown, self.settings)
         corpus.status = CorpusStatus.INDEX_PREPARED.value
         corpus.index_ready = True
@@ -425,9 +455,17 @@ class Orchestrator:
             entity_id=corpus.id,
             trace_id=query.trace_id,
             payload=result,
+            actor=self._actor_label,
         )
         self.session.commit()
         return result
+
+    def get_corpus(self, corpus_id: str) -> Corpus:
+        corpus = self.session.get(Corpus, corpus_id)
+        if not corpus:
+            raise ValueError(f"Corpus {corpus_id} not found")
+        self._ensure_query_access(corpus.query)
+        return corpus
 
     def _decide_document(self, global_score: int, fragments: list[SalvagedFragment]) -> tuple[str, str | None]:
         if global_score >= self.settings.accept_threshold:
@@ -445,6 +483,15 @@ class Orchestrator:
         if fragments:
             return f"Document rejected globally ({global_score}/100) but {len(fragments)} fragments were salvaged"
         return f"Document rejected with score {global_score}/100 and no salvageable fragment"
+
+    @property
+    def _actor_label(self) -> str:
+        return (self.principal or AuthContext()).actor_label
+
+    def _ensure_query_access(self, query: Query) -> None:
+        if can_access_query(self.principal or AuthContext(), query):
+            return
+        raise PermissionError("Access denied to this query")
 
 
 def _build_excerpt(text: str, max_chars: int = 320) -> str:

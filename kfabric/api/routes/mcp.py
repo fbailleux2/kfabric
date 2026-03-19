@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from kfabric import __version__
-from kfabric.api.deps import get_db, get_runtime_settings, require_api_key
+from kfabric.api.deps import get_db, get_request_principal, get_runtime_settings, require_authenticated_principal
 from kfabric.api.serializers import (
     serialize_mcp_session,
     serialize_prompt,
@@ -42,7 +42,7 @@ from kfabric.mcp.registry import (
 )
 
 
-router = APIRouter(tags=["mcp"], dependencies=[Depends(require_api_key)])
+router = APIRouter(tags=["mcp"], dependencies=[Depends(require_authenticated_principal)])
 
 
 @router.post("/mcp/sessions", response_model=MCPSessionResponse)
@@ -101,25 +101,26 @@ def call_tool(
     payload: ToolInvokeRequest,
     db: Session = Depends(get_db),
     settings: AppSettings = Depends(get_runtime_settings),
+    principal=Depends(get_request_principal),
 ) -> ToolRunResponse:
-    run = invoke_tool(db, settings, tool_name, payload.arguments, payload.session_id)
+    run = invoke_tool(db, settings, principal, tool_name, payload.arguments, payload.session_id)
     return serialize_tool_run(run)
 
 
 @router.get("/resources", response_model=list[ResourceResponse])
-def list_resources(db: Session = Depends(get_db)) -> list[ResourceResponse]:
-    return [serialize_resource(resource) for resource in get_resource_definitions(db)]
+def list_resources(db: Session = Depends(get_db), principal=Depends(get_request_principal)) -> list[ResourceResponse]:
+    return [serialize_resource(resource) for resource in get_resource_definitions(db, principal)]
 
 
 @router.get("/resources/{resource_id}", response_model=ResourceResponse)
-def get_resource(resource_id: str, db: Session = Depends(get_db)) -> ResourceResponse:
-    return serialize_resource(get_resource_definition(db, resource_id))
+def get_resource(resource_id: str, db: Session = Depends(get_db), principal=Depends(get_request_principal)) -> ResourceResponse:
+    return serialize_resource(get_resource_definition(db, principal, resource_id))
 
 
 @router.get("/resources/{resource_id}/content", response_model=ResourceContentResponse)
-def get_resource_content(resource_id: str, db: Session = Depends(get_db)) -> ResourceContentResponse:
-    resource = get_resource_definition(db, resource_id)
-    mime_type, content = resource.resolver(db, resource_id)
+def get_resource_content(resource_id: str, db: Session = Depends(get_db), principal=Depends(get_request_principal)) -> ResourceContentResponse:
+    resource = get_resource_definition(db, principal, resource_id)
+    mime_type, content = resource.resolver(db, principal, resource_id)
     return serialize_resource_content(resource_id, mime_type, content)
 
 
@@ -138,6 +139,7 @@ def render_prompt(
     prompt_name: str,
     payload: PromptRenderRequest,
     db: Session = Depends(get_db),
+    principal=Depends(get_request_principal),
 ) -> PromptRenderResponse:
     prompt = get_prompt_definition(prompt_name)
-    return serialize_prompt_render(prompt, prompt.renderer(db, payload.arguments))
+    return serialize_prompt_render(prompt, prompt.renderer(db, principal, payload.arguments))

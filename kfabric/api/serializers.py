@@ -3,6 +3,7 @@ from __future__ import annotations
 from kfabric.domain.enums import SessionStatus, ToolRunStatus
 from kfabric.domain.schemas import (
     AnalyzeDocumentResponse,
+    AuthSessionResponse,
     AuditEventResponse,
     CandidateResponse,
     CollectCandidateResponse,
@@ -19,6 +20,9 @@ from kfabric.domain.schemas import (
     ResourceResponse,
     ScoreBreakdown,
     SynthesisResponse,
+    UserResponse,
+    UserTokenCreateResponse,
+    UserTokenResponse,
     ToolRunResponse,
     ToolSchemaResponse,
     VersionResponse,
@@ -35,6 +39,8 @@ from kfabric.infra.models import (
     ParsedDocument,
     SalvagedFragment,
     ToolRun,
+    User,
+    UserAPIToken,
 )
 
 
@@ -201,3 +207,32 @@ def serialize_version(service: str, version: str, environment: str, secure_mode:
 
 def serialize_audit_event(event: AuditEvent) -> AuditEventResponse:
     return AuditEventResponse.model_validate(event)
+
+
+def serialize_user(user: User) -> UserResponse:
+    return UserResponse.model_validate(user)
+
+
+def serialize_auth_session(user: User, authentication_mode: str, session_expires_at) -> AuthSessionResponse:
+    return AuthSessionResponse(
+        user=serialize_user(user),
+        authentication_mode=authentication_mode,
+        session_expires_at=session_expires_at,
+    )
+
+
+def serialize_user_token(token: UserAPIToken) -> UserTokenResponse:
+    return UserTokenResponse.model_validate(token)
+
+
+def serialize_user_token_create(token: UserAPIToken, plain_text_token: str) -> UserTokenCreateResponse:
+    return UserTokenCreateResponse(
+        id=token.id,
+        name=token.name,
+        token_prefix=token.token_prefix,
+        last_used_at=token.last_used_at,
+        expires_at=token.expires_at,
+        revoked_at=token.revoked_at,
+        created_at=token.created_at,
+        plain_text_token=plain_text_token,
+    )

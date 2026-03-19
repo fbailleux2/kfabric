@@ -59,3 +59,8 @@ class SessionStatus(StrEnum):
     ACTIVE = "active"
     CLOSED = "closed"
     EXPIRED = "expired"
+
+
+class UserRole(StrEnum):
+    ADMIN = "admin"
+    MEMBER = "member"

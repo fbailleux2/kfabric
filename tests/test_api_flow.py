@@ -3,7 +3,21 @@ from __future__ import annotations
 from pathlib import Path
 
 
+def _bootstrap_admin(client) -> dict[str, object]:
+    response = client.post(
+        "/api/v1/auth/bootstrap-admin",
+        json={
+            "email": "admin@example.com",
+            "password": "supersecret123",
+            "display_name": "Admin",
+        },
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
 def test_full_api_flow(client):
+    _bootstrap_admin(client)
     create_response = client.post(
         "/api/v1/queries",
         json={
@@ -71,6 +85,27 @@ def test_full_api_flow(client):
 
 
 def test_web_views_render(client):
+    home = client.get("/", follow_redirects=False)
+    assert home.status_code == 303
+    assert home.headers["location"] == "/auth?next=/"
+
+    auth_page = client.get("/auth")
+    assert auth_page.status_code == 200
+    assert "Créer le premier administrateur" in auth_page.text
+
+    bootstrap = client.post(
+        "/web/auth/bootstrap",
+        data={
+            "display_name": "Admin",
+            "email": "admin@example.com",
+            "password": "supersecret123",
+            "next_path": "/",
+        },
+        follow_redirects=False,
+    )
+    assert bootstrap.status_code == 303
+    assert bootstrap.headers["location"] == "/"
+
     home = client.get("/")
     assert home.status_code == 200
     assert "KFabric" in home.text
@@ -92,6 +127,7 @@ def test_web_views_render(client):
 
 
 def test_web_corpus_export_views(client):
+    _bootstrap_admin(client)
     create_response = client.post(
         "/api/v1/queries",
         json={

@@ -22,14 +22,13 @@
           <a href="/docs">API</a>
           <a href="/api/v1/version">Version</a>
           <a href="/api/v1/mcp/capabilities">MCP</a>
-          {% if settings.api_key %}
-            {% if request.state.web_authenticated %}
-              <form method="post" action="/web/auth/logout">
-                <button type="submit">Déconnexion</button>
-              </form>
-            {% else %}
-              <a href="/auth">Connexion</a>
-            {% endif %}
+          {% if request.state.web_authenticated %}
+            <span>{{ request.state.current_user.display_name or request.state.current_user.email }}</span>
+            <form method="post" action="/web/auth/logout">
+              <button type="submit">Déconnexion</button>
+            </form>
+          {% else %}
+            <a href="/auth">Connexion</a>
           {% endif %}
         </nav>
       </header>

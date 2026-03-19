@@ -1,7 +1,20 @@
 from __future__ import annotations
 
 
+def _bootstrap_admin(client) -> None:
+    response = client.post(
+        "/api/v1/auth/bootstrap-admin",
+        json={
+            "email": "admin@example.com",
+            "password": "supersecret123",
+            "display_name": "Admin",
+        },
+    )
+    assert response.status_code == 200
+
+
 def test_mcp_rest_catalog_and_tool_invocation(client):
+    _bootstrap_admin(client)
     create_query = client.post(
         "/api/v1/queries",
         json={"theme": "Corpus juridique", "keywords": ["reglementation", "europe"]},

@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from kfabric import __version__
-from kfabric.api.deps import get_db, get_runtime_settings, require_api_key
+from kfabric.api.deps import get_db, get_runtime_settings, require_authenticated_principal
 from kfabric.api.serializers import serialize_audit_event, serialize_version
 from kfabric.config import AppSettings
 from kfabric.domain.schemas import AuditEventResponse, HealthResponse, ReadinessResponse, VersionResponse
@@ -14,7 +14,7 @@ from kfabric.infra.observability import get_metrics_payload
 from kfabric.infra.runtime_checks import collect_runtime_status
 
 
-router = APIRouter(tags=["system"], dependencies=[Depends(require_api_key)])
+router = APIRouter(tags=["system"], dependencies=[Depends(require_authenticated_principal)])
 
 
 @router.get("/health", response_model=HealthResponse)

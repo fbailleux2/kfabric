@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from kfabric import __version__
+from kfabric.api.routes.auth import router as auth_router
 from kfabric.api.routes.mcp import router as mcp_router
 from kfabric.api.routes.queries import router as queries_router
 from kfabric.api.routes.system import router as system_router
@@ -65,6 +66,7 @@ def create_app() -> FastAPI:
     app.add_middleware(TraceMiddleware)
     static_dir = Path(__file__).resolve().parent.parent / "web" / "static"
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    app.include_router(auth_router, prefix="/api/v1")
     app.include_router(system_router, prefix="/api/v1")
     app.include_router(queries_router, prefix="/api/v1")
     if settings.enable_mcp:
@@ -111,6 +113,21 @@ def create_app() -> FastAPI:
             content={
                 "error": {
                     "code": "not_found" if status_code == 404 else "bad_request",
+                    "message": str(exc),
+                    "details": {},
+                    "trace_id": request.state.trace_id,
+                }
+            },
+        )
+
+    @app.exception_handler(PermissionError)
+    async def handle_permission_error(request: Request, exc: PermissionError) -> JSONResponse:
+        logger.warning("kfabric.permission_error", path=str(request.url.path), trace_id=request.state.trace_id, detail=str(exc))
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": {
+                    "code": "forbidden",
                     "message": str(exc),
                     "details": {},
                     "trace_id": request.state.trace_id,

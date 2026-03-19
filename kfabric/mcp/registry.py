@@ -12,6 +12,8 @@ from kfabric import __version__
 from kfabric.config import AppSettings
 from kfabric.domain.enums import SessionStatus, ToolRunStatus
 from kfabric.infra.models import (
+    CandidateDocument,
+    CollectedDocument,
     Corpus,
     FragmentSynthesis,
     MCPSession,
@@ -21,12 +23,13 @@ from kfabric.infra.models import (
     ToolRun,
     utcnow,
 )
+from kfabric.services.auth_service import AuthContext, build_visibility_clause, can_access_query
 from kfabric.services.orchestrator import Orchestrator
 
 
 ToolHandler = Callable[[Orchestrator, Session, AppSettings, dict[str, Any]], Any]
-PromptRenderer = Callable[[Session, dict[str, Any]], list[dict[str, str]]]
-ResourceResolver = Callable[[Session, str], tuple[str, str]]
+PromptRenderer = Callable[[Session, AuthContext, dict[str, Any]], list[dict[str, str]]]
+ResourceResolver = Callable[[Session, AuthContext, str], tuple[str, str]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,13 +183,14 @@ def _generate_fragment_synthesis(orchestrator: Orchestrator, _db: Session, _sett
     return {"synthesis_id": synthesis.id, "overall_confidence": synthesis.overall_confidence}
 
 
-def _get_corpus_status(_orchestrator: Orchestrator, db: Session, _settings: AppSettings, arguments: dict[str, Any]) -> Any:
+def _get_corpus_status(orchestrator: Orchestrator, db: Session, _settings: AppSettings, arguments: dict[str, Any]) -> Any:
     corpus_id = arguments.get("corpus_id")
     if corpus_id:
-        corpus = db.get(Corpus, corpus_id)
+        corpus = orchestrator.get_corpus(corpus_id)
     else:
         query_id = arguments["query_id"]
-        corpus = db.scalars(select(Corpus).where(Corpus.query_id == query_id).order_by(Corpus.created_at.desc())).first()
+        query = orchestrator.get_query(query_id)
+        corpus = db.scalars(select(Corpus).where(Corpus.query_id == query.id).order_by(Corpus.created_at.desc())).first()
     if not corpus:
         raise ValueError("Corpus not found")
     return {
@@ -198,7 +202,7 @@ def _get_corpus_status(_orchestrator: Orchestrator, db: Session, _settings: AppS
 
 
 def get_tool_definitions() -> list[ToolDefinition]:
-    common_security = {"authentication": "api_key_when_configured", "audit": True}
+    common_security = {"authentication": "user_session_or_api_token", "audit": True}
     return [
         ToolDefinition(
             name="discover_documents",
@@ -303,35 +307,39 @@ def get_tool_definition(name: str) -> ToolDefinition:
     raise ValueError(f"Tool {name} not found")
 
 
-def _resolve_document_resource(db: Session, resource_id: str) -> tuple[str, str]:
+def _resolve_document_resource(db: Session, principal: AuthContext, resource_id: str) -> tuple[str, str]:
     _, document_id = resource_id.split(":", maxsplit=1)
     document = db.get(ParsedDocument, document_id)
     if not document:
         raise ValueError(f"Resource {resource_id} not found")
+    _ensure_query_access(principal, document.collected_document.candidate.query)
     return "text/markdown", document.normalized_text
 
 
-def _resolve_synthesis_resource(db: Session, resource_id: str) -> tuple[str, str]:
+def _resolve_synthesis_resource(db: Session, principal: AuthContext, resource_id: str) -> tuple[str, str]:
     _, synthesis_id = resource_id.split(":", maxsplit=1)
     synthesis = db.get(FragmentSynthesis, synthesis_id)
     if not synthesis:
         raise ValueError(f"Resource {resource_id} not found")
+    _ensure_query_access(principal, synthesis.query)
     return "text/markdown", synthesis.synthesis_markdown
 
 
-def _resolve_corpus_resource(db: Session, resource_id: str) -> tuple[str, str]:
+def _resolve_corpus_resource(db: Session, principal: AuthContext, resource_id: str) -> tuple[str, str]:
     _, corpus_id = resource_id.split(":", maxsplit=1)
     corpus = db.get(Corpus, corpus_id)
     if not corpus:
         raise ValueError(f"Resource {resource_id} not found")
+    _ensure_query_access(principal, corpus.query)
     return "text/markdown", corpus.corpus_markdown
 
 
-def _resolve_query_resource(db: Session, resource_id: str) -> tuple[str, str]:
+def _resolve_query_resource(db: Session, principal: AuthContext, resource_id: str) -> tuple[str, str]:
     _, query_id = resource_id.split(":", maxsplit=1)
     query = db.get(Query, query_id)
     if not query:
         raise ValueError(f"Resource {resource_id} not found")
+    _ensure_query_access(principal, query)
     return (
         "application/json",
         json.dumps(
@@ -349,9 +357,20 @@ def _resolve_query_resource(db: Session, resource_id: str) -> tuple[str, str]:
     )
 
 
-def get_resource_definitions(db: Session) -> list[ResourceDefinition]:
+def get_resource_definitions(db: Session, principal: AuthContext) -> list[ResourceDefinition]:
     resources: list[ResourceDefinition] = []
-    for document in db.scalars(select(ParsedDocument).order_by(ParsedDocument.created_at.desc()).limit(20)):
+    document_stmt = (
+        select(ParsedDocument)
+        .join(ParsedDocument.collected_document)
+        .join(CollectedDocument.candidate)
+        .join(CandidateDocument.query)
+        .order_by(ParsedDocument.created_at.desc())
+        .limit(20)
+    )
+    visibility_clause = build_visibility_clause(principal)
+    if visibility_clause is not None:
+        document_stmt = document_stmt.where(visibility_clause)
+    for document in db.scalars(document_stmt):
         resources.append(
             ResourceDefinition(
                 resource_id=f"document:{document.id}",
@@ -365,7 +384,10 @@ def get_resource_definitions(db: Session) -> list[ResourceDefinition]:
                 resolver=_resolve_document_resource,
             )
         )
-    for fragment_query in db.scalars(select(Query).order_by(Query.created_at.desc()).limit(10)):
+    query_stmt = select(Query).order_by(Query.created_at.desc()).limit(10)
+    if visibility_clause is not None:
+        query_stmt = query_stmt.where(visibility_clause)
+    for fragment_query in db.scalars(query_stmt):
         resources.append(
             ResourceDefinition(
                 resource_id=f"query:{fragment_query.id}",
@@ -379,7 +401,10 @@ def get_resource_definitions(db: Session) -> list[ResourceDefinition]:
                 resolver=_resolve_query_resource,
             )
         )
-    for synthesis in db.scalars(select(FragmentSynthesis).order_by(FragmentSynthesis.created_at.desc()).limit(20)):
+    synthesis_stmt = select(FragmentSynthesis).join(Query).order_by(FragmentSynthesis.created_at.desc()).limit(20)
+    if visibility_clause is not None:
+        synthesis_stmt = synthesis_stmt.where(visibility_clause)
+    for synthesis in db.scalars(synthesis_stmt):
         resources.append(
             ResourceDefinition(
                 resource_id=f"synthesis:{synthesis.id}",
@@ -393,7 +418,10 @@ def get_resource_definitions(db: Session) -> list[ResourceDefinition]:
                 resolver=_resolve_synthesis_resource,
             )
         )
-    for corpus in db.scalars(select(Corpus).order_by(Corpus.created_at.desc()).limit(20)):
+    corpus_stmt = select(Corpus).join(Query).order_by(Corpus.created_at.desc()).limit(20)
+    if visibility_clause is not None:
+        corpus_stmt = corpus_stmt.where(visibility_clause)
+    for corpus in db.scalars(corpus_stmt):
         resources.append(
             ResourceDefinition(
                 resource_id=f"corpus:{corpus.id}",
@@ -410,17 +438,18 @@ def get_resource_definitions(db: Session) -> list[ResourceDefinition]:
     return resources
 
 
-def get_resource_definition(db: Session, resource_id: str) -> ResourceDefinition:
-    for resource in get_resource_definitions(db):
+def get_resource_definition(db: Session, principal: AuthContext, resource_id: str) -> ResourceDefinition:
+    for resource in get_resource_definitions(db, principal):
         if resource.resource_id == resource_id:
             return resource
     raise ValueError(f"Resource {resource_id} not found")
 
 
-def _render_document_summary(db: Session, arguments: dict[str, Any]) -> list[dict[str, str]]:
+def _render_document_summary(db: Session, principal: AuthContext, arguments: dict[str, Any]) -> list[dict[str, str]]:
     document = db.get(ParsedDocument, arguments["document_id"])
     if not document:
         raise ValueError(f"Document {arguments['document_id']} not found")
+    _ensure_query_access(principal, document.collected_document.candidate.query)
     return [
         {
             "role": "user",
@@ -433,7 +462,11 @@ def _render_document_summary(db: Session, arguments: dict[str, Any]) -> list[dic
     ]
 
 
-def _render_fragment_synthesis(db: Session, arguments: dict[str, Any]) -> list[dict[str, str]]:
+def _render_fragment_synthesis(db: Session, principal: AuthContext, arguments: dict[str, Any]) -> list[dict[str, str]]:
+    query = db.get(Query, arguments["query_id"])
+    if not query:
+        raise ValueError(f"Query {arguments['query_id']} not found")
+    _ensure_query_access(principal, query)
     fragments = list(
         db.scalars(
             select(SalvagedFragment)
@@ -454,10 +487,11 @@ def _render_fragment_synthesis(db: Session, arguments: dict[str, Any]) -> list[d
     ]
 
 
-def _render_corpus_review(db: Session, arguments: dict[str, Any]) -> list[dict[str, str]]:
+def _render_corpus_review(db: Session, principal: AuthContext, arguments: dict[str, Any]) -> list[dict[str, str]]:
     corpus = db.get(Corpus, arguments["corpus_id"])
     if not corpus:
         raise ValueError(f"Corpus {arguments['corpus_id']} not found")
+    _ensure_query_access(principal, corpus.query)
     return [
         {
             "role": "user",
@@ -506,6 +540,7 @@ def get_prompt_definition(name: str) -> PromptDefinition:
 def invoke_tool(
     db: Session,
     settings: AppSettings,
+    principal: AuthContext,
     tool_name: str,
     arguments: dict[str, Any],
     session_id: str | None = None,
@@ -521,7 +556,7 @@ def invoke_tool(
     )
     db.add(tool_run)
     db.flush()
-    orchestrator = Orchestrator(session=db, settings=settings)
+    orchestrator = Orchestrator(session=db, settings=settings, principal=principal)
     try:
         output = tool.handler(orchestrator, db, settings, arguments)
         tool_run.status = ToolRunStatus.SUCCEEDED.value
@@ -534,3 +569,9 @@ def invoke_tool(
     db.commit()
     db.refresh(tool_run)
     return tool_run
+
+
+def _ensure_query_access(principal: AuthContext, query: Query) -> None:
+    if can_access_query(principal, query):
+        return
+    raise PermissionError("Access denied to this query")

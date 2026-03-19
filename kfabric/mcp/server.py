@@ -18,6 +18,7 @@ from kfabric.mcp.registry import (
     get_tool_definitions,
     invoke_tool,
 )
+from kfabric.services.auth_service import AuthContext
 
 
 def _db_session():
@@ -29,6 +30,7 @@ def _db_session():
 async def _fallback_stdio_loop() -> None:
     settings = get_settings()
     session = _db_session()
+    principal = AuthContext(is_system=True, auth_mode="mcp_stdio")
     try:
         for raw_line in sys.stdin:
             line = raw_line.strip()
@@ -44,19 +46,30 @@ async def _fallback_stdio_loop() -> None:
                 elif action == "tools/list":
                     response = {"result": [serialize_tool_schema(tool).model_dump() for tool in get_tool_definitions()]}
                 elif action == "tools/call":
-                    run = invoke_tool(session, settings, payload["tool_name"], payload.get("arguments", {}), payload.get("session_id"))
+                    run = invoke_tool(
+                        session,
+                        settings,
+                        principal,
+                        payload["tool_name"],
+                        payload.get("arguments", {}),
+                        payload.get("session_id"),
+                    )
                     response = {"result": run.output_payload}
                 elif action == "resources/list":
-                    response = {"result": [serialize_resource(resource).model_dump() for resource in get_resource_definitions(session)]}
+                    response = {
+                        "result": [serialize_resource(resource).model_dump() for resource in get_resource_definitions(session, principal)]
+                    }
                 elif action == "resources/read":
-                    resource = get_resource_definition(session, payload["resource_id"])
-                    mime_type, content = resource.resolver(session, payload["resource_id"])
+                    resource = get_resource_definition(session, principal, payload["resource_id"])
+                    mime_type, content = resource.resolver(session, principal, payload["resource_id"])
                     response = {"result": {"resource_id": resource.resource_id, "mime_type": mime_type, "content": content}}
                 elif action == "prompts/list":
                     response = {"result": [serialize_prompt(prompt).model_dump() for prompt in get_prompt_definitions()]}
                 elif action == "prompts/get":
                     prompt = get_prompt_definition(payload["prompt_name"])
-                    response = {"result": {"name": prompt.name, "messages": prompt.renderer(session, payload.get("arguments", {}))}}
+                    response = {
+                        "result": {"name": prompt.name, "messages": prompt.renderer(session, principal, payload.get("arguments", {}))}
+                    }
                 elif action == "ping":
                     response = {"result": {"ok": True}}
                 else:
@@ -78,10 +91,11 @@ def run_stdio_server() -> None:
 
     settings = get_settings()
     session = _db_session()
+    principal = AuthContext(is_system=True, auth_mode="mcp_stdio")
     server = FastMCP(f"{settings.app_name} MCP")
 
     def _tool_call(name: str, arguments: dict[str, Any]) -> Any:
-        run = invoke_tool(session, settings, name, arguments)
+        run = invoke_tool(session, settings, principal, name, arguments)
         return run.output_payload
 
     for definition in get_tool_definitions():
@@ -99,7 +113,7 @@ def run_stdio_server() -> None:
         def _make_prompt(prompt_name: str):
             def _runner(**kwargs: Any) -> str:
                 definition = get_prompt_definition(prompt_name)
-                messages = definition.renderer(session, kwargs)
+                messages = definition.renderer(session, principal, kwargs)
                 return "\n\n".join(message["content"] for message in messages)
 
             _runner.__name__ = prompt_name
@@ -108,11 +122,11 @@ def run_stdio_server() -> None:
 
         server.prompt(name=prompt.name)(_make_prompt(prompt.name))
 
-    for resource in get_resource_definitions(session):
+    for resource in get_resource_definitions(session, principal):
         def _make_resource(resource_id: str):
             def _runner() -> str:
-                definition = get_resource_definition(session, resource_id)
-                return definition.resolver(session, resource_id)[1]
+                definition = get_resource_definition(session, principal, resource_id)
+                return definition.resolver(session, principal, resource_id)[1]
 
             _runner.__name__ = resource_id.replace(":", "_")
             _runner.__doc__ = resource.title

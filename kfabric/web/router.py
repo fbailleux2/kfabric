@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from secrets import compare_digest
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -9,10 +8,11 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from kfabric.api.deps import WEB_SESSION_COOKIE, get_db, get_orchestrator, issue_web_session_cookie_value, require_web_session
+from kfabric.api.deps import WEB_SESSION_COOKIE, get_db, get_orchestrator, require_web_session
 from kfabric.config import get_settings
 from kfabric.domain.schemas import QueryCreate
-from kfabric.infra.models import CandidateDocument, Corpus, FragmentCluster, FragmentSynthesis, Query
+from kfabric.infra.models import CandidateDocument, Corpus, FragmentCluster, FragmentSynthesis
+from kfabric.services.auth_service import authenticate_user, bootstrap_admin, create_web_session, revoke_web_session
 from kfabric.services.corpus_export import export_filename, render_corpus_html
 from kfabric.services.orchestrator import Orchestrator
 
@@ -27,10 +27,8 @@ def _split_csv(value: str | None) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def _dashboard_context(db: Session, query_id: str) -> dict[str, object]:
-    query = db.get(Query, query_id)
-    if not query:
-        raise ValueError(f"Query {query_id} not found")
+def _dashboard_context(db: Session, orchestrator: Orchestrator, query_id: str) -> dict[str, object]:
+    query = orchestrator.get_query(query_id)
     candidates = list(
         db.scalars(
             select(CandidateDocument)
@@ -71,8 +69,6 @@ def _dashboard_context(db: Session, query_id: str) -> dict[str, object]:
 @router.get("/auth", response_class=HTMLResponse)
 def auth_page(request: Request) -> HTMLResponse:
     settings = get_settings()
-    if not settings.api_key:
-        return RedirectResponse(url="/", status_code=303)
     if getattr(request.state, "web_authenticated", False):
         return RedirectResponse(url="/", status_code=303)
     return templates.TemplateResponse(
@@ -83,16 +79,21 @@ def auth_page(request: Request) -> HTMLResponse:
             "settings": settings,
             "next_path": request.query_params.get("next") or "/",
             "error_message": None,
+            "bootstrap_required": getattr(request.state, "bootstrap_required", False),
         },
     )
 
 
 @router.post("/web/auth/session")
-def create_web_session(request: Request, api_key: str = Form(default=""), next_path: str = Form(default="/")) -> Response:
+def create_password_session(
+    request: Request,
+    email: str = Form(default=""),
+    password: str = Form(default=""),
+    next_path: str = Form(default="/"),
+    db: Session = Depends(get_db),
+) -> Response:
     settings = get_settings()
-    if not settings.api_key:
-        return RedirectResponse(url="/", status_code=303)
-    if not compare_digest(api_key, settings.api_key):
+    if getattr(request.state, "bootstrap_required", False):
         return templates.TemplateResponse(
             request=request,
             name="auth.html",
@@ -100,15 +101,33 @@ def create_web_session(request: Request, api_key: str = Form(default=""), next_p
                 "request": request,
                 "settings": settings,
                 "next_path": next_path or "/",
-                "error_message": "Clé API invalide",
+                "error_message": "Un administrateur initial doit d'abord être créé",
+                "bootstrap_required": True,
             },
             status_code=401,
         )
 
+    user = authenticate_user(db, email=email, password=password)
+    if user is None:
+        return templates.TemplateResponse(
+            request=request,
+            name="auth.html",
+            context={
+                "request": request,
+                "settings": settings,
+                "next_path": next_path or "/",
+                "error_message": "Identifiants invalides",
+                "bootstrap_required": False,
+            },
+            status_code=401,
+        )
+
+    web_session, raw_token = create_web_session(db, user=user, ttl_seconds=settings.session_ttl_seconds)
+    db.commit()
     response = RedirectResponse(url=next_path or "/", status_code=303)
     response.set_cookie(
         WEB_SESSION_COOKIE,
-        issue_web_session_cookie_value(settings.api_key),
+        raw_token,
         httponly=True,
         secure=request.url.scheme == "https",
         samesite="strict",
@@ -118,15 +137,62 @@ def create_web_session(request: Request, api_key: str = Form(default=""), next_p
 
 
 @router.post("/web/auth/logout")
-def clear_web_session() -> RedirectResponse:
+def clear_web_session(request: Request, db: Session = Depends(get_db)) -> RedirectResponse:
+    session_token = request.cookies.get(WEB_SESSION_COOKIE)
+    if session_token:
+        revoke_web_session(db, session_token)
+        db.commit()
     response = RedirectResponse(url="/auth", status_code=303)
-    response.delete_cookie(WEB_SESSION_COOKIE)
+    response.delete_cookie(WEB_SESSION_COOKIE, httponly=True, samesite="strict")
+    return response
+
+
+@router.post("/web/auth/bootstrap")
+def bootstrap_web_admin(
+    request: Request,
+    email: str = Form(default=""),
+    password: str = Form(default=""),
+    display_name: str = Form(default=""),
+    next_path: str = Form(default="/"),
+    db: Session = Depends(get_db),
+) -> Response:
+    settings = get_settings()
+    if not getattr(request.state, "bootstrap_required", False):
+        return RedirectResponse(url="/auth", status_code=303)
+    try:
+        user = bootstrap_admin(db, email=email, password=password, display_name=display_name or None)
+        web_session, raw_token = create_web_session(db, user=user, ttl_seconds=settings.session_ttl_seconds)
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return templates.TemplateResponse(
+            request=request,
+            name="auth.html",
+            context={
+                "request": request,
+                "settings": settings,
+                "next_path": next_path or "/",
+                "error_message": str(exc),
+                "bootstrap_required": True,
+            },
+            status_code=400,
+        )
+
+    response = RedirectResponse(url=next_path or "/", status_code=303)
+    response.set_cookie(
+        WEB_SESSION_COOKIE,
+        raw_token,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="strict",
+        max_age=settings.session_ttl_seconds,
+    )
     return response
 
 
 @router.get("/", response_class=HTMLResponse)
-def home(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
-    recent_queries = list(db.scalars(select(Query).order_by(Query.created_at.desc()).limit(8)))
+def home(request: Request, orchestrator: Orchestrator = Depends(get_orchestrator)) -> HTMLResponse:
+    recent_queries = orchestrator.list_recent_queries(limit=8)
     return templates.TemplateResponse(
         request=request,
         name="index.html",
@@ -139,8 +205,13 @@ def home(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
 
 
 @router.get("/queries/{query_id}", response_class=HTMLResponse)
-def query_dashboard(request: Request, query_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
-    context = _dashboard_context(db, query_id)
+def query_dashboard(
+    request: Request,
+    query_id: str,
+    db: Session = Depends(get_db),
+    orchestrator: Orchestrator = Depends(get_orchestrator),
+) -> HTMLResponse:
+    context = _dashboard_context(db, orchestrator, query_id)
     context.update({"request": request, "settings": get_settings()})
     return templates.TemplateResponse(request=request, name="dashboard.html", context=context)
 
@@ -222,28 +293,21 @@ def build_corpus(query_id: str, orchestrator: Orchestrator = Depends(get_orchest
 def prepare_index(
     corpus_id: str,
     orchestrator: Orchestrator = Depends(get_orchestrator),
-    db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    corpus = db.get(Corpus, corpus_id)
-    if not corpus:
-        raise ValueError(f"Corpus {corpus_id} not found")
+    corpus = orchestrator.get_corpus(corpus_id)
     orchestrator.prepare_index(corpus_id)
     return RedirectResponse(url=f"/queries/{corpus.query_id}", status_code=303)
 
 
 @router.get("/web/corpora/{corpus_id}/export.html", response_class=HTMLResponse)
-def export_corpus_html(corpus_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
-    corpus = db.get(Corpus, corpus_id)
-    if not corpus:
-        raise ValueError(f"Corpus {corpus_id} not found")
+def export_corpus_html(corpus_id: str, orchestrator: Orchestrator = Depends(get_orchestrator)) -> HTMLResponse:
+    corpus = orchestrator.get_corpus(corpus_id)
     return HTMLResponse(content=render_corpus_html(corpus))
 
 
 @router.get("/web/corpora/{corpus_id}/export.md")
-def export_corpus_markdown(corpus_id: str, db: Session = Depends(get_db)) -> Response:
-    corpus = db.get(Corpus, corpus_id)
-    if not corpus:
-        raise ValueError(f"Corpus {corpus_id} not found")
+def export_corpus_markdown(corpus_id: str, orchestrator: Orchestrator = Depends(get_orchestrator)) -> Response:
+    corpus = orchestrator.get_corpus(corpus_id)
     return Response(
         content=corpus.corpus_markdown,
         media_type="text/markdown",

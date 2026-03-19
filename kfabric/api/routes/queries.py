@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Response
-from sqlalchemy.orm import Session
 
-from kfabric.api.deps import get_db, get_orchestrator, require_api_key
+from kfabric.api.deps import get_orchestrator, require_authenticated_principal
 from kfabric.api.serializers import (
     serialize_analysis,
     serialize_candidate,
@@ -31,12 +30,11 @@ from kfabric.domain.schemas import (
     SynthesisCreateRequest,
     SynthesisResponse,
 )
-from kfabric.infra.models import Corpus
 from kfabric.services.corpus_export import export_filename, render_corpus_html
 from kfabric.services.orchestrator import Orchestrator
 
 
-router = APIRouter(tags=["queries"], dependencies=[Depends(require_api_key)])
+router = APIRouter(tags=["queries"], dependencies=[Depends(require_authenticated_principal)])
 
 
 @router.post("/queries", response_model=QueryResponse)
@@ -114,11 +112,9 @@ def build_corpus(query_id: str, orchestrator: Orchestrator = Depends(get_orchest
 def export_corpus(
     corpus_id: str,
     format: str = Query(default="markdown", pattern="^(markdown|html)$"),
-    db: Session = Depends(get_db),
+    orchestrator: Orchestrator = Depends(get_orchestrator),
 ) -> Response:
-    corpus = db.get(Corpus, corpus_id)
-    if not corpus:
-        raise ValueError(f"Corpus {corpus_id} not found")
+    corpus = orchestrator.get_corpus(corpus_id)
 
     if format == "html":
         return Response(
@@ -135,17 +131,13 @@ def export_corpus(
 
 
 @router.get("/corpora/{corpus_id}", response_model=CorpusResponse)
-def get_corpus(corpus_id: str, db: Session = Depends(get_db)) -> CorpusResponse:
-    corpus = db.get(Corpus, corpus_id)
-    if not corpus:
-        raise ValueError(f"Corpus {corpus_id} not found")
+def get_corpus(corpus_id: str, orchestrator: Orchestrator = Depends(get_orchestrator)) -> CorpusResponse:
+    corpus = orchestrator.get_corpus(corpus_id)
     return serialize_corpus(corpus)
 
 
 @router.post("/corpora/{corpus_id}:prepare-index", response_model=PrepareIndexResponse)
-def prepare_index(corpus_id: str, orchestrator: Orchestrator = Depends(get_orchestrator), db: Session = Depends(get_db)) -> PrepareIndexResponse:
+def prepare_index(corpus_id: str, orchestrator: Orchestrator = Depends(get_orchestrator)) -> PrepareIndexResponse:
     payload = orchestrator.prepare_index(corpus_id)
-    corpus = db.get(Corpus, corpus_id)
-    if not corpus:
-        raise ValueError(f"Corpus {corpus_id} not found")
+    corpus = orchestrator.get_corpus(corpus_id)
     return serialize_prepare_index(corpus, payload)

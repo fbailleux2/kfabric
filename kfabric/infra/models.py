@@ -15,6 +15,7 @@ from kfabric.domain.enums import (
     QueryStatus,
     SessionStatus,
     ToolRunStatus,
+    UserRole,
     VerificationStatus,
 )
 
@@ -40,6 +41,7 @@ class Query(Base, TimestampMixin):
     __tablename__ = "queries"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: new_id("qry"))
+    owner_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     theme: Mapped[str | None] = mapped_column(String(255), nullable=True)
     question: Mapped[str | None] = mapped_column(Text, nullable=True)
     keywords: Mapped[list[str]] = mapped_column(JSON, default=list)
@@ -53,6 +55,7 @@ class Query(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(32), default=QueryStatus.CREATED.value)
     trace_id: Mapped[str] = mapped_column(String(64), default=lambda: new_id("tr"))
 
+    owner: Mapped[User | None] = relationship(back_populates="queries")
     expansions: Mapped[list[QueryExpansion]] = relationship(back_populates="query", cascade="all, delete-orphan")
     candidates: Mapped[list[CandidateDocument]] = relationship(back_populates="query", cascade="all, delete-orphan")
     fragment_clusters: Mapped[list[FragmentCluster]] = relationship(back_populates="query", cascade="all, delete-orphan")
@@ -269,3 +272,47 @@ class AuditEvent(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
+
+class User(Base, TimestampMixin):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: new_id("usr"))
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(255), default="")
+    password_hash: Mapped[str] = mapped_column(Text)
+    role: Mapped[str] = mapped_column(String(32), default=UserRole.MEMBER.value)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    queries: Mapped[list[Query]] = relationship(back_populates="owner")
+    api_tokens: Mapped[list[UserAPIToken]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    web_sessions: Mapped[list[UserWebSession]] = relationship(back_populates="user", cascade="all, delete-orphan")
+
+
+class UserAPIToken(Base, TimestampMixin):
+    __tablename__ = "user_api_tokens"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: new_id("tok"))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    token_prefix: Mapped[str] = mapped_column(String(32))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped[User] = relationship(back_populates="api_tokens")
+
+
+class UserWebSession(Base):
+    __tablename__ = "user_web_sessions"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: new_id("wsess"))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    session_token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    user: Mapped[User] = relationship(back_populates="web_sessions")

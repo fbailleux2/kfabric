@@ -11,6 +11,7 @@ from kfabric.domain.enums import (
     QueryStatus,
     SessionStatus,
     ToolRunStatus,
+    UserRole,
     VerificationStatus,
 )
 
@@ -33,6 +34,7 @@ class QueryCreate(SchemaModel):
 
 class QueryResponse(SchemaModel):
     id: str
+    owner_user_id: str | None = None
     theme: str | None
     question: str | None
     keywords: list[str]
@@ -274,6 +276,69 @@ class ErrorBody(SchemaModel):
     message: str
     details: dict[str, Any] = Field(default_factory=dict)
     trace_id: str
+
+
+class UserResponse(SchemaModel):
+    id: str
+    email: str
+    display_name: str
+    role: UserRole
+    is_active: bool
+    last_login_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AuthBootstrapRequest(SchemaModel):
+    email: str
+    password: str
+    display_name: str | None = None
+
+
+class LoginRequest(SchemaModel):
+    email: str
+    password: str
+
+
+class UserCreateRequest(SchemaModel):
+    email: str
+    password: str
+    display_name: str | None = None
+    role: UserRole = UserRole.MEMBER
+
+
+class UserStatusUpdateResponse(SchemaModel):
+    user: UserResponse
+
+
+class AuthSessionResponse(SchemaModel):
+    user: UserResponse
+    authentication_mode: str
+    session_expires_at: datetime | None = None
+
+
+class PasswordChangeRequest(SchemaModel):
+    current_password: str
+    new_password: str
+
+
+class UserTokenCreateRequest(SchemaModel):
+    name: str
+    expires_in_days: int | None = Field(default=30, ge=1, le=3650)
+
+
+class UserTokenResponse(SchemaModel):
+    id: str
+    name: str
+    token_prefix: str
+    last_used_at: datetime | None = None
+    expires_at: datetime | None = None
+    revoked_at: datetime | None = None
+    created_at: datetime
+
+
+class UserTokenCreateResponse(UserTokenResponse):
+    plain_text_token: str
 
 
 class ErrorEnvelope(SchemaModel):

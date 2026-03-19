@@ -3,23 +3,52 @@
 {% block content %}
 <section class="hero-card">
   <div class="hero-copy">
-    <p class="eyebrow">Mode sécurisé</p>
-    <h1>Authentification requise</h1>
+    <p class="eyebrow">Accès sécurisé</p>
+    <h1>{% if bootstrap_required %}Créer le premier administrateur{% else %}Authentification requise{% endif %}</h1>
     <p class="lede">
-      Une clé API est configurée pour cette instance KFabric. Ouvre une session web pour accéder
-      aux workflows, aux exports et aux actions de collecte.
+      {% if bootstrap_required %}
+        Cette instance KFabric n’a encore aucun compte. Crée le premier administrateur pour activer l’accès multi-utilisateur.
+      {% else %}
+        Connecte-toi avec ton adresse e-mail et ton mot de passe pour accéder aux workflows, aux exports et aux actions de collecte.
+      {% endif %}
     </p>
   </div>
-  <form class="search-panel" method="post" action="/web/auth/session">
-    <input type="hidden" name="next_path" value="{{ next_path }}" />
-    <label>
-      <span>Clé API</span>
-      <input name="api_key" type="password" autocomplete="current-password" placeholder="Saisir la clé API KFabric" />
-    </label>
-    {% if error_message %}
-      <div class="empty-card">{{ error_message }}</div>
-    {% endif %}
-    <button type="submit" class="primary-button">Ouvrir la session</button>
-  </form>
+  {% if bootstrap_required %}
+    <form class="search-panel" method="post" action="/web/auth/bootstrap">
+      <input type="hidden" name="next_path" value="{{ next_path }}" />
+      <label>
+        <span>Nom affiché</span>
+        <input name="display_name" type="text" placeholder="Admin KFabric" />
+      </label>
+      <label>
+        <span>E-mail</span>
+        <input name="email" type="email" autocomplete="username" placeholder="admin@example.com" />
+      </label>
+      <label>
+        <span>Mot de passe</span>
+        <input name="password" type="password" autocomplete="new-password" placeholder="Au moins 10 caractères" />
+      </label>
+      {% if error_message %}
+        <div class="empty-card">{{ error_message }}</div>
+      {% endif %}
+      <button type="submit" class="primary-button">Créer l’administrateur</button>
+    </form>
+  {% else %}
+    <form class="search-panel" method="post" action="/web/auth/session">
+      <input type="hidden" name="next_path" value="{{ next_path }}" />
+      <label>
+        <span>E-mail</span>
+        <input name="email" type="email" autocomplete="username" placeholder="nom@entreprise.fr" />
+      </label>
+      <label>
+        <span>Mot de passe</span>
+        <input name="password" type="password" autocomplete="current-password" placeholder="Mot de passe" />
+      </label>
+      {% if error_message %}
+        <div class="empty-card">{{ error_message }}</div>
+      {% endif %}
+      <button type="submit" class="primary-button">Ouvrir la session</button>
+    </form>
+  {% endif %}
 </section>
 {% endblock %}
