@@ -13,6 +13,7 @@ def app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("KFABRIC_DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setenv("KFABRIC_STORAGE_PATH", str(storage_path))
     monkeypatch.setenv("KFABRIC_ENABLE_MCP", "true")
+    monkeypatch.setenv("KFABRIC_REMOTE_DISCOVERY_ENABLED", "false")
     monkeypatch.setenv("KFABRIC_REMOTE_COLLECTION_ENABLED", "false")
 
     from kfabric.config import get_settings

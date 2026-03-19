@@ -91,7 +91,7 @@ class Orchestrator:
     def discover(self, query_id: str) -> list[CandidateDocument]:
         query = self.get_query(query_id)
         created_candidates: list[CandidateDocument] = []
-        for candidate_payload in discover_candidates(query):
+        for candidate_payload in discover_candidates(query, settings=self.settings):
             candidate = CandidateDocument(query_id=query.id, **candidate_payload)
             self.session.add(candidate)
             created_candidates.append(candidate)

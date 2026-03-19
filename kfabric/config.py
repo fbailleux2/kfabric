@@ -19,6 +19,7 @@ class AppSettings(BaseSettings):
     enable_metrics: bool = True
     enable_mcp: bool = True
     secure_mode: bool = True
+    remote_discovery_enabled: bool = False
     remote_collection_enabled: bool = False
     max_fragment_chars: int = 280
     accept_threshold: int = 75
