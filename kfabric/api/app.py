@@ -1,0 +1,110 @@
+from __future__ import annotations
+
+from pathlib import Path
+from time import perf_counter
+from uuid import uuid4
+
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
+
+from kfabric import __version__
+from kfabric.api.routes.mcp import router as mcp_router
+from kfabric.api.routes.queries import router as queries_router
+from kfabric.api.routes.system import router as system_router
+from kfabric.config import get_settings
+from kfabric.infra.db import init_db
+from kfabric.infra.observability import REQUEST_COUNTER, REQUEST_LATENCY, get_logger, setup_logging
+from kfabric.web.router import router as web_router
+
+
+class TraceMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        trace_id = request.headers.get("x-trace-id", f"tr_{uuid4().hex[:12]}")
+        request.state.trace_id = trace_id
+        start = perf_counter()
+        response = None
+        try:
+            response = await call_next(request)
+        finally:
+            duration = perf_counter() - start
+            REQUEST_COUNTER.labels(request.method, request.url.path, getattr(response, "status_code", 500)).inc()
+            REQUEST_LATENCY.labels(request.method, request.url.path).observe(duration)
+        if response is not None:
+            response.headers["x-trace-id"] = trace_id
+        return response
+
+
+def create_app() -> FastAPI:
+    settings = get_settings()
+    setup_logging()
+    init_db(settings)
+    app = FastAPI(title=settings.app_name, version=__version__, docs_url="/docs", redoc_url="/redoc")
+    app.add_middleware(TraceMiddleware)
+    static_dir = Path(__file__).resolve().parent.parent / "web" / "static"
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    app.include_router(system_router, prefix="/api/v1")
+    app.include_router(queries_router, prefix="/api/v1")
+    if settings.enable_mcp:
+        app.include_router(mcp_router, prefix="/api/v1")
+    app.include_router(web_router)
+
+    logger = get_logger(__name__)
+
+    @app.exception_handler(ValueError)
+    async def handle_value_error(request: Request, exc: ValueError) -> JSONResponse:
+        status_code = 404 if "not found" in str(exc).lower() else 400
+        logger.warning("kfabric.value_error", path=str(request.url.path), trace_id=request.state.trace_id, detail=str(exc))
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "error": {
+                    "code": "not_found" if status_code == 404 else "bad_request",
+                    "message": str(exc),
+                    "details": {},
+                    "trace_id": request.state.trace_id,
+                }
+            },
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+        logger.warning(
+            "kfabric.validation_error",
+            path=str(request.url.path),
+            trace_id=request.state.trace_id,
+            errors=exc.errors(),
+        )
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": {
+                    "code": "validation_error",
+                    "message": "Payload validation failed",
+                    "details": {"errors": exc.errors()},
+                    "trace_id": request.state.trace_id,
+                }
+            },
+        )
+
+    @app.exception_handler(Exception)
+    async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+        logger.exception("kfabric.unexpected_error", path=str(request.url.path), trace_id=request.state.trace_id, detail=str(exc))
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "internal_error",
+                    "message": "Unexpected server error",
+                    "details": {},
+                    "trace_id": request.state.trace_id,
+                }
+            },
+        )
+
+    return app
+
+
+app = create_app()

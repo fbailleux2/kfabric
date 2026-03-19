@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block title %}KFabric | {{ query.theme or query.question or query.id }}{% endblock %}
+{% block content %}
+<section class="dashboard-hero">
+  <div>
+    <p class="eyebrow">Workflow corpus</p>
+    <h1>{{ query.theme or query.question or query.id }}</h1>
+    <p class="lede">
+      Statut: <strong>{{ query.status }}</strong> • Mots-clés: {{ query.keywords | join(", ") if query.keywords else "aucun" }}
+    </p>
+  </div>
+  <div class="stats-strip">
+    <div><strong>{{ candidates|length }}</strong><span>candidats</span></div>
+    <div><strong>{{ fragments|length }}</strong><span>fragments</span></div>
+    <div><strong>{{ syntheses|length }}</strong><span>synthèses</span></div>
+    <div><strong>{{ accepted_count }}</strong><span>acceptés</span></div>
+  </div>
+</section>
+
+<section class="action-bar">
+  <form method="post" action="/web/queries/{{ query.id }}/consolidate"><button type="submit">Consolider les fragments</button></form>
+  <form method="post" action="/web/queries/{{ query.id }}/syntheses"><button type="submit">Générer la synthèse</button></form>
+  <form method="post" action="/web/queries/{{ query.id }}/corpora"><button type="submit" class="primary-button">Construire le corpus</button></form>
+</section>
+
+<section class="dashboard-grid">
+  <article class="panel span-2">
+    <div class="panel-head">
+      <h2>Documents candidats</h2>
+      <span>{{ candidates|length }} éléments</span>
+    </div>
+    <div class="table-card">
+      <table>
+        <thead>
+          <tr>
+            <th>Titre</th>
+            <th>Source</th>
+            <th>Statut</th>
+            <th>Décision</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for candidate in candidates %}
+            {% set collected = candidate.collected_document %}
+            {% set parsed = collected.parsed_document if collected else None %}
+            {% set score = parsed.score if parsed else None %}
+            {% set decision = parsed.decision if parsed else None %}
+            <tr>
+              <td>
+                <strong>{{ candidate.title }}</strong>
+                <small>{{ candidate.snippet }}</small>
+              </td>
+              <td>{{ candidate.domain }}</td>
+              <td>{{ candidate.status }}</td>
+              <td>
+                {% if decision %}
+                  {{ decision.status }}{% if score %} • {{ score.global_score }}/100{% endif %}
+                {% else %}
+                  non analysé
+                {% endif %}
+              </td>
+              <td class="action-cell">
+                {% if not collected %}
+                  <form method="post" action="/web/candidates/{{ candidate.id }}/collect"><button type="submit">Collecter</button></form>
+                {% elif not parsed %}
+                  <form method="post" action="/web/documents/{{ collected.id }}/analyze"><button type="submit">Analyser</button></form>
+                {% else %}
+                  <div class="inline-actions">
+                    <form method="post" action="/web/documents/{{ parsed.id }}/accept"><button type="submit">Accepter</button></form>
+                    <form method="post" action="/web/documents/{{ parsed.id }}/reject"><button type="submit">Rejeter</button></form>
+                  </div>
+                {% endif %}
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="5" class="empty-cell">Aucun candidat disponible pour cette requête.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+
+  <article class="panel">
+    <div class="panel-head">
+      <h2>Fragments récupérés</h2>
+      <span>{{ fragments|length }} extraits</span>
+    </div>
+    <div class="stack-list">
+      {% for fragment in fragments[:10] %}
+        <div class="stack-item">
+          <strong>{{ fragment.fragment_type }}</strong>
+          <p>{{ fragment.fragment_text }}</p>
+          <small>Score {{ fragment.fragment_score }} • confiance {{ "%.2f"|format(fragment.confidence_level) }}</small>
+        </div>
+      {% else %}
+        <div class="empty-card">Aucun fragment sauvé pour l’instant.</div>
+      {% endfor %}
+    </div>
+  </article>
+
+  <article class="panel">
+    <div class="panel-head">
+      <h2>Clusters</h2>
+      <span>{{ clusters|length }} groupes</span>
+    </div>
+    <div class="stack-list">
+      {% for cluster in clusters %}
+        <div class="stack-item">
+          <strong>{{ cluster.label }}</strong>
+          <p>{{ cluster.cluster_summary }}</p>
+          <small>Apport marginal {{ "%.2f"|format(cluster.contribution_score) }}</small>
+        </div>
+      {% else %}
+        <div class="empty-card">La consolidation n’a pas encore été lancée.</div>
+      {% endfor %}
+    </div>
+  </article>
+
+  <article class="panel span-2">
+    <div class="panel-head">
+      <h2>Synthèses documentaires</h2>
+      <span>{{ syntheses|length }} synthèses</span>
+    </div>
+    <div class="stack-list">
+      {% for synthesis in syntheses %}
+        <div class="stack-item">
+          <strong>{{ synthesis.theme }}</strong>
+          <p>{{ synthesis.synthesis_markdown[:260] }}{% if synthesis.synthesis_markdown|length > 260 %}...{% endif %}</p>
+          <small>{{ synthesis.generated_from_n_fragments }} fragments • confiance {{ "%.2f"|format(synthesis.overall_confidence) }}</small>
+        </div>
+      {% else %}
+        <div class="empty-card">Aucune synthèse générée pour le moment.</div>
+      {% endfor %}
+    </div>
+  </article>
+
+  <article class="panel span-2">
+    <div class="panel-head">
+      <h2>Corpus final</h2>
+      <span>{{ corpora|length }} versions</span>
+    </div>
+    <div class="stack-list">
+      {% for corpus in corpora %}
+        <div class="stack-item">
+          <div class="between">
+            <strong>{{ corpus.title }}</strong>
+            <span>{{ corpus.status }}</span>
+          </div>
+          <p>{{ corpus.corpus_markdown[:280] }}{% if corpus.corpus_markdown|length > 280 %}...{% endif %}</p>
+          <div class="between">
+            <small>Index prêt: {{ "oui" if corpus.index_ready else "non" }}</small>
+            <form method="post" action="/web/corpora/{{ corpus.id }}/prepare-index">
+              <button type="submit">Préparer l’index</button>
+            </form>
+          </div>
+        </div>
+      {% else %}
+        <div class="empty-card">Le corpus final n’a pas encore été construit.</div>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+{% endblock %}

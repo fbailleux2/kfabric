@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}KFabric | Explorer la connaissance{% endblock %}
+{% block content %}
+<section class="hero-card">
+  <div class="hero-copy">
+    <p class="eyebrow">Corpus d'abord, RAG ensuite</p>
+    <h1>Explorez la connaissance et fabriquez un corpus traçable</h1>
+    <p class="lede">
+      KFabric découvre des sources, score les documents, sauve les fragments utiles et prépare
+      un corpus pondéré prêt pour la pré-indexation.
+    </p>
+  </div>
+  <form class="search-panel" method="post" action="/web/queries" x-data="{ secure: true }">
+    <label>
+      <span>Thème</span>
+      <input name="theme" type="text" placeholder="Réglementation savon artisanal en Europe" />
+    </label>
+    <label>
+      <span>Question</span>
+      <textarea name="question" rows="3" placeholder="Quels textes récents et quelles obligations concrètes faut-il intégrer ?"></textarea>
+    </label>
+    <label>
+      <span>Mots-clés</span>
+      <input name="keywords" type="text" placeholder="savon artisanal, europe, conformité, INCI" />
+    </label>
+    <div class="grid-2">
+      <label>
+        <span>Domaines préférés</span>
+        <input name="preferred_domains" type="text" placeholder="europa.eu, data.gouv.fr, service-public.fr" />
+      </label>
+      <label>
+        <span>Types de documents</span>
+        <input name="document_types" type="text" placeholder="pdf, web, docx" />
+      </label>
+    </div>
+    <label>
+      <span>Domaines exclus</span>
+      <input name="excluded_domains" type="text" placeholder="forums.example, content-farm.example" />
+    </label>
+    <div class="toolbar-row">
+      <label class="toggle">
+        <input type="checkbox" checked x-model="secure" disabled />
+        <span>Mode sécurisé activé</span>
+      </label>
+      <select name="quality_target">
+        <option value="balanced">Qualité équilibrée</option>
+        <option value="strict">Qualité stricte</option>
+        <option value="wide">Couverture large</option>
+      </select>
+    </div>
+    <button type="submit" class="primary-button">Explorer les documents</button>
+  </form>
+</section>
+
+<section class="feature-grid">
+  <article class="feature-card">
+    <h2>Découverte documentaire</h2>
+    <p>Expansion sémantique, multi-sources, scoring précoce et stockage traçable des candidats.</p>
+  </article>
+  <article class="feature-card">
+    <h2>Fragments récupérés</h2>
+    <p>Sauvegarde des signaux faibles, références, dates et chiffres utiles même quand un document est rejeté.</p>
+  </article>
+  <article class="feature-card">
+    <h2>Serveur MCP natif</h2>
+    <p>Mêmes outils, mêmes ressources et mêmes prompts via REST et via un serveur MCP Python.</p>
+  </article>
+  <article class="feature-card">
+    <h2>Pré-indexation RAG</h2>
+    <p>Chunking et artefacts indexables dès le MVP sans enfermer le produit dans une UI de chat prématurée.</p>
+  </article>
+</section>
+
+<section class="recent-section">
+  <div class="section-head">
+    <h2>Requêtes récentes</h2>
+    <p>Relancez un workflow existant ou inspectez son état d’avancement.</p>
+  </div>
+  <div class="recent-list">
+    {% for query in recent_queries %}
+      <a class="recent-item" href="/queries/{{ query.id }}">
+        <strong>{{ query.theme or query.question or query.id }}</strong>
+        <span>{{ query.status }}</span>
+      </a>
+    {% else %}
+      <div class="empty-card">Aucune requête pour le moment. Lancez une première exploration.</div>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

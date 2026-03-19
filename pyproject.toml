@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kfabric"
+version = "0.1.0"
+description = "Python-first documentary corpus factory with REST, MCP, workers and lightweight UI."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "alembic>=1.14.0",
+  "beautifulsoup4>=4.12.3",
+  "celery>=5.4.0",
+  "fastapi>=0.115.0",
+  "httpx>=0.28.0",
+  "jinja2>=3.1.5",
+  "markdown-it-py>=3.0.0",
+  "mcp>=1.26.0",
+  "opentelemetry-api>=1.29.0",
+  "opentelemetry-sdk>=1.29.0",
+  "psycopg[binary]>=3.2.3",
+  "prometheus-client>=0.21.0",
+  "pydantic>=2.10.0",
+  "pydantic-settings>=2.7.0",
+  "python-multipart>=0.0.20",
+  "rapidfuzz>=3.10.1",
+  "redis>=5.2.1",
+  "sqlalchemy>=2.0.36",
+  "structlog>=24.4.0",
+  "uvicorn>=0.32.1"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.4"
+]
+extended = [
+  "pypdf>=5.1.0",
+  "python-docx>=1.1.2",
+  "qdrant-client>=1.12.1",
+  "readability-lxml>=0.8.1",
+  "trafilatura>=1.12.2"
+]
+
+[project.scripts]
+kfabric-api = "kfabric.main:run_api"
+kfabric-worker = "kfabric.main:run_worker"
+kfabric-mcp = "kfabric.main:run_mcp"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["kfabric*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
