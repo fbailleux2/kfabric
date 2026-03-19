@@ -1,5 +1,7 @@
 # KFabric
 
+[![CI](https://github.com/fbailleux2/kfabric/actions/workflows/ci.yml/badge.svg)](https://github.com/fbailleux2/kfabric/actions/workflows/ci.yml)
+
 KFabric est une plateforme Python-first de fabrication de corpus documentaires.
 Le projet vise un problème très concret : aider à construire un corpus traçable,
 pondéré et réutilisable à partir de sources hétérogènes, avant même de brancher
@@ -157,6 +159,9 @@ Les tests principaux peuvent être lancés avec :
 ```bash
 pytest
 ```
+
+Le dépôt exécute aussi une CI GitHub Actions sur `push` et `pull_request` via
+[`ci.yml`](.github/workflows/ci.yml).
 
 Le MVP a été vérifié localement avec :
 
