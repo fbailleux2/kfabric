@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import io
 from hashlib import sha256
 
 import httpx
+from docx import Document as DocxDocument
 
 from kfabric.config import AppSettings
 from kfabric.infra.models import CandidateDocument, Query
@@ -23,6 +25,19 @@ SIMPLE_PDF_BYTES = (
     b"endstream\nendobj\n"
     b"trailer<</Root 1 0 R>>\n%%EOF"
 )
+
+
+def _build_simple_docx_bytes() -> bytes:
+    document = DocxDocument()
+    document.core_properties.title = "Guide documentaire DOCX"
+    document.add_heading("Conformite cosmetique", level=1)
+    document.add_paragraph("Le dossier technique doit conserver les preuves documentaires utiles.")
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+SIMPLE_DOCX_BYTES = _build_simple_docx_bytes()
 
 
 def test_discovery_targets_institutional_domains():
@@ -296,12 +311,140 @@ def test_collect_document_preserves_pdf_payload(monkeypatch):
     payload = collect_document(candidate, query, settings)
 
     assert payload["content_type"] == "application/pdf"
-    assert payload["collection_method"] == "httpx_pdf"
+    assert payload["collection_method"] == "example_org_direct_connector"
     assert payload["raw_hash"] == sha256(SIMPLE_PDF_BYTES).hexdigest()
     assert payload["raw_content"].startswith(BINARY_PAYLOAD_PREFIX)
     binary_payload = unpack_binary_payload(payload["raw_content"])
     assert binary_payload is not None
     assert binary_payload.data == SIMPLE_PDF_BYTES
+
+
+def test_collect_document_resolves_eurlex_search_page_to_pdf(monkeypatch):
+    candidate = CandidateDocument(
+        source_url="https://eur-lex.europa.eu/search.html?scope=EURLEX&text=savon",
+        title="Recherche EUR-Lex",
+        snippet="",
+        domain="eur-lex.europa.eu",
+        document_type="web",
+        language="fr",
+        discovery_rank=1,
+        discovery_source="targeted_domain_search",
+    )
+    query = Query(theme="Savon", question="Question", keywords=[], language="fr")
+    settings = AppSettings(remote_collection_enabled=True)
+
+    def fake_get(url, *args, **kwargs):
+        if "search.html" in url:
+            html = """
+            <html>
+              <body>
+                <div class="SearchResult">
+                  <h2><a href="/legal-content/FR/TXT/?uri=CELEX:32009R1223">Reglement 1223/2009</a></h2>
+                </div>
+              </body>
+            </html>
+            """
+            return httpx.Response(200, headers={"content-type": "text/html"}, text=html, request=httpx.Request("GET", url))
+        if "legal-content/FR/TXT/?" in url:
+            html = """
+            <html>
+              <body>
+                <main>
+                  <h1 class="eli-main-title">Reglement cosmetique 1223/2009</h1>
+                  <a href="/legal-content/FR/TXT/PDF/?uri=CELEX:32009R1223">Version PDF</a>
+                </main>
+              </body>
+            </html>
+            """
+            return httpx.Response(200, headers={"content-type": "text/html"}, text=html, request=httpx.Request("GET", url))
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/pdf"},
+            content=SIMPLE_PDF_BYTES,
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    payload = collect_document(candidate, query, settings)
+
+    assert candidate.source_url == "https://eur-lex.europa.eu/legal-content/FR/TXT/?uri=CELEX:32009R1223"
+    assert candidate.title == "Reglement cosmetique 1223/2009"
+    assert candidate.document_type == "pdf"
+    assert payload["content_type"] == "application/pdf"
+    assert payload["collection_method"] == "eur_lex_europa_eu_resource_connector"
+    assert unpack_binary_payload(payload["raw_content"]) is not None
+
+
+def test_collect_document_enriches_servicepublic_html_candidate(monkeypatch):
+    candidate = CandidateDocument(
+        source_url="https://www.service-public.fr/professionnels-entreprises/vosdroits/F35732",
+        title="Titre recherche",
+        snippet="Snippet court",
+        domain="service-public.fr",
+        document_type="web",
+        language="fr",
+        discovery_rank=1,
+        discovery_source="remote_search_connector",
+    )
+    query = Query(theme="Cosmetique", question="Question", keywords=[], language="fr")
+    settings = AppSettings(remote_collection_enabled=True)
+
+    def fake_get(url, *args, **kwargs):
+        html = """
+        <html>
+          <head>
+            <meta name="description" content="Fiche pratique sur les obligations administratives et les justificatifs a conserver.">
+          </head>
+          <body>
+            <main class="sp-content">
+              <h1 class="page-title">Demarches pour la mise sur le marche</h1>
+              <p class="introduction">Cette fiche precise les obligations administratives et les justificatifs attendus.</p>
+            </main>
+          </body>
+        </html>
+        """
+        return httpx.Response(200, headers={"content-type": "text/html"}, text=html, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    payload = collect_document(candidate, query, settings)
+
+    assert candidate.title == "Demarches pour la mise sur le marche"
+    assert "obligations administratives" in candidate.snippet
+    assert payload["collection_method"] == "service_public_fr_html_connector"
+    assert payload["content_type"] == "text/html"
+
+
+def test_collect_document_preserves_docx_payload(monkeypatch):
+    candidate = CandidateDocument(
+        source_url="https://example.org/guide.docx",
+        title="Guide DOCX",
+        snippet="",
+        domain="example.org",
+        document_type="docx",
+        language="fr",
+        discovery_rank=1,
+        discovery_source="test",
+    )
+    query = Query(theme="Savon", question="Question", keywords=[], language="fr")
+    settings = AppSettings(remote_collection_enabled=True)
+
+    def fake_get(*args, **kwargs):
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+            content=SIMPLE_DOCX_BYTES,
+            request=httpx.Request("GET", candidate.source_url),
+        )
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    payload = collect_document(candidate, query, settings)
+
+    assert payload["content_type"] == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    assert unpack_binary_payload(payload["raw_content"]) is not None
+    assert payload["collection_method"] == "example_org_direct_connector"
 
 
 def test_parse_document_extracts_html_content():
@@ -524,3 +667,31 @@ def test_parse_document_extracts_pdf_text():
     assert "Reglementation savon 2024" in parsed["normalized_text"]
     assert "Directive cosmetique europeenne" in parsed["normalized_text"]
     assert parsed["extraction_method"] in {"pypdf", "pdf_literal_fallback"}
+
+
+def test_parse_document_extracts_docx_text():
+    candidate = CandidateDocument(
+        source_url="https://example.org/guide.docx",
+        title="DOCX fallback",
+        snippet="",
+        domain="example.org",
+        document_type="docx",
+        language="fr",
+        discovery_rank=1,
+        discovery_source="test",
+    )
+
+    from kfabric.services.content_payloads import pack_binary_payload
+
+    parsed = parse_document(
+        pack_binary_payload(
+            SIMPLE_DOCX_BYTES,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            title="Guide DOCX",
+        ),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        candidate,
+    )
+
+    assert parsed["extraction_method"] in {"docx", "docx_fallback"}
+    assert "Conformite cosmetique" in parsed["normalized_text"]

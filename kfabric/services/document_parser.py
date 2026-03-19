@@ -10,6 +10,11 @@ from kfabric.infra.models import CandidateDocument
 from kfabric.services.content_payloads import BinaryPayload, unpack_binary_payload
 
 try:
+    from docx import Document as DocxDocument
+except Exception:  # pragma: no cover - optional dependency
+    DocxDocument = None
+
+try:
     from pypdf import PdfReader
 except Exception:  # pragma: no cover - optional dependency
     PdfReader = None
@@ -61,6 +66,8 @@ def _parse_binary_payload(
 ) -> tuple[str, str, list[str], str]:
     if "pdf" in payload.media_type:
         return _parse_pdf_document(payload.data, candidate, payload.title)
+    if "wordprocessingml" in payload.media_type or "docx" in payload.media_type:
+        return _parse_docx_document(payload.data, candidate, payload.title)
     text = payload.data.decode("utf-8", errors="ignore")
     return candidate.title, text, _extract_markdown_headings(text), "binary_text"
 
@@ -98,6 +105,29 @@ def _extract_pdf_metadata_title(reader: PdfReader) -> str | None:
         if title:
             return str(title)
     return None
+
+
+def _parse_docx_document(
+    raw_docx: bytes,
+    candidate: CandidateDocument,
+    payload_title: str | None,
+) -> tuple[str, str, list[str], str]:
+    extracted_title = payload_title or candidate.title
+    if DocxDocument is not None:
+        try:
+            document = DocxDocument(io.BytesIO(raw_docx))
+            core_title = (document.core_properties.title or "").strip()
+            if core_title:
+                extracted_title = core_title
+            paragraphs = [paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip()]
+            text = "\n".join(paragraphs).strip()
+            if text:
+                return extracted_title, text, _extract_candidate_headings(text), "docx"
+        except Exception:
+            pass
+
+    fallback_text = candidate.snippet or candidate.title
+    return extracted_title, fallback_text, _extract_candidate_headings(fallback_text), "docx_fallback"
 
 
 def _extract_pdf_literal_text(raw_pdf: bytes) -> str:

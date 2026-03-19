@@ -7,6 +7,7 @@ import httpx
 from kfabric.config import AppSettings
 from kfabric.infra.models import CandidateDocument, Query
 from kfabric.services.content_payloads import pack_binary_payload
+from kfabric.services.source_connectors import fetch_remote_candidate_content
 
 
 REQUEST_HEADERS = {
@@ -27,19 +28,19 @@ def collect_document(candidate: CandidateDocument, query: Query, settings: AppSe
 
     if settings.remote_collection_enabled and candidate.source_url.startswith("http"):
         try:
-            response = httpx.get(
-                candidate.source_url,
-                timeout=10.0,
-                follow_redirects=True,
+            remote_result = fetch_remote_candidate_content(
+                candidate,
                 headers=REQUEST_HEADERS,
+                timeout=10.0,
             )
-            try:
-                response.raise_for_status()
-            except RuntimeError:
-                if response.status_code >= 400:
-                    raise
-            content_type = _detect_content_type(candidate.source_url, response)
-            raw_content, raw_hash, collection_method = _build_collected_payload(candidate, response, content_type)
+            content_type = _detect_content_type(remote_result.content_url, remote_result.response)
+            raw_content, raw_hash, collection_method = _build_collected_payload(
+                candidate,
+                remote_result.response,
+                content_type,
+                content_url=remote_result.content_url,
+                collection_method=remote_result.collection_method,
+            )
         except Exception:
             raw_content = _synthetic_content(candidate, query)
             raw_hash = sha256(raw_content.encode("utf-8")).hexdigest()
@@ -59,24 +60,38 @@ def _build_collected_payload(
     candidate: CandidateDocument,
     response: httpx.Response,
     content_type: str,
+    *,
+    content_url: str,
+    collection_method: str,
 ) -> tuple[str, str, str]:
-    if _is_pdf_content(candidate.source_url, content_type, response.content):
+    if _is_pdf_content(content_url, content_type, response.content):
         raw_content = pack_binary_payload(
             response.content,
             "application/pdf",
-            source_url=candidate.source_url,
+            source_url=content_url,
             title=candidate.title,
         )
-        return raw_content, sha256(response.content).hexdigest(), "httpx_pdf"
+        return raw_content, sha256(response.content).hexdigest(), collection_method
+
+    if _is_docx_content(content_url, content_type, response.content):
+        raw_content = pack_binary_payload(
+            response.content,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            source_url=content_url,
+            title=candidate.title,
+        )
+        return raw_content, sha256(response.content).hexdigest(), collection_method
 
     raw_content = _decode_response_text(response)
-    return raw_content, sha256(raw_content.encode("utf-8")).hexdigest(), "httpx_html"
+    return raw_content, sha256(raw_content.encode("utf-8")).hexdigest(), collection_method
 
 
 def _detect_content_type(source_url: str, response: httpx.Response) -> str:
     header_content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
     if _is_pdf_content(source_url, header_content_type, response.content):
         return "application/pdf"
+    if _is_docx_content(source_url, header_content_type, response.content):
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     if header_content_type:
         return header_content_type
     if _looks_like_html(response.content):
@@ -89,6 +104,15 @@ def _is_pdf_content(source_url: str, content_type: str, content: bytes) -> bool:
         "pdf" in (content_type or "")
         or source_url.lower().endswith(".pdf")
         or content.startswith(b"%PDF-")
+    )
+
+
+def _is_docx_content(source_url: str, content_type: str, content: bytes) -> bool:
+    lowered_url = source_url.lower()
+    return (
+        "wordprocessingml" in (content_type or "")
+        or lowered_url.endswith(".docx")
+        or (content.startswith(b"PK") and "docx" in lowered_url)
     )
 
 
