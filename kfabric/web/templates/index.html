@@ -10,7 +10,7 @@
       un corpus pondéré prêt pour la pré-indexation.
     </p>
   </div>
-  <form class="search-panel" method="post" action="/web/queries" x-data="{ secure: true }">
+  <form class="search-panel" method="post" action="/web/queries">
     <label>
       <span>Thème</span>
       <input name="theme" type="text" placeholder="Réglementation savon artisanal en Europe" />
@@ -39,7 +39,7 @@
     </label>
     <div class="toolbar-row">
       <label class="toggle">
-        <input type="checkbox" checked x-model="secure" disabled />
+        <input type="checkbox" checked disabled />
         <span>Mode sécurisé activé</span>
       </label>
       <select name="quality_target">

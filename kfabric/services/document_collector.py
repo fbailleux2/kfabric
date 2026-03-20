@@ -92,6 +92,10 @@ def _detect_content_type(source_url: str, response: httpx.Response) -> str:
         return "application/pdf"
     if _is_docx_content(source_url, header_content_type, response.content):
         return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    if _is_markdown_content(source_url, header_content_type):
+        return "text/markdown"
+    if _is_text_content(source_url, header_content_type):
+        return "text/plain"
     if header_content_type:
         return header_content_type
     if _looks_like_html(response.content):
@@ -114,6 +118,16 @@ def _is_docx_content(source_url: str, content_type: str, content: bytes) -> bool
         or lowered_url.endswith(".docx")
         or (content.startswith(b"PK") and "docx" in lowered_url)
     )
+
+
+def _is_markdown_content(source_url: str, content_type: str) -> bool:
+    lowered_url = source_url.lower()
+    return "markdown" in (content_type or "") or lowered_url.endswith((".md", ".markdown"))
+
+
+def _is_text_content(source_url: str, content_type: str) -> bool:
+    lowered_url = source_url.lower()
+    return "text/plain" in (content_type or "") or lowered_url.endswith(".txt")
 
 
 def _looks_like_html(content: bytes) -> bool:

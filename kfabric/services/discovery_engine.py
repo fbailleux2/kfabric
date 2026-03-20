@@ -107,6 +107,7 @@ DISCOVERY_HEADERS = {
 def discover_candidates(query: Query, settings: AppSettings | None = None) -> list[dict[str, object]]:
     search_terms = _build_search_terms(query)
     preferred_domains = _select_domains(query)
+    requested_types = _requested_document_types(query)
     candidates: list[dict[str, object]] = []
     primary_topic = query.theme or query.question or "Corpus documentaire"
     next_rank = 1
@@ -126,13 +127,23 @@ def discover_candidates(query: Query, settings: AppSettings | None = None) -> li
         remote_candidates: list[dict[str, object]] = []
         if settings and settings.remote_discovery_enabled:
             remote_candidates = _discover_remote_candidates(query, profile, search_query, next_rank)
+            remote_candidates = _filter_candidates_by_type(remote_candidates, requested_types)
 
         if remote_candidates:
             candidates.extend(remote_candidates)
             next_rank += len(remote_candidates)
             continue
 
-        candidates.append(_build_fallback_candidate(query, profile, search_query, keyword, next_rank))
+        fallback_candidate = _build_fallback_candidate(
+            query,
+            profile,
+            search_query,
+            keyword,
+            next_rank,
+            requested_types=requested_types,
+        )
+        if _matches_requested_types(str(fallback_candidate["document_type"]), requested_types):
+            candidates.append(fallback_candidate)
         next_rank += 1
     return candidates
 
@@ -180,8 +191,11 @@ def _build_fallback_candidate(
     search_query: str,
     keyword: str,
     rank: int,
+    *,
+    requested_types: set[str] | None = None,
 ) -> dict[str, object]:
     primary_topic = query.theme or query.question or "Corpus documentaire"
+    fallback_type = _preferred_fallback_type(profile.document_type, requested_types or set())
     title = f"{primary_topic} - {profile.title_suffix}"
     snippet = (
         f"{profile.snippet_hint} Focus {keyword}. "
@@ -195,7 +209,7 @@ def _build_fallback_candidate(
         "title": title,
         "snippet": snippet,
         "domain": profile.domain,
-        "document_type": profile.document_type,
+        "document_type": fallback_type,
         "language": query.language,
         "discovery_rank": rank,
         "discovery_source": profile.discovery_source,
@@ -351,6 +365,14 @@ def _infer_document_type(source_url: str, title: str, snippet: str, fallback_typ
     lowered = " ".join([source_url.lower(), title.lower(), snippet.lower()])
     if ".pdf" in lowered or " pdf" in lowered:
         return "pdf"
+    if ".docx" in lowered or "wordprocessingml" in lowered:
+        return "docx"
+    if ".md" in lowered or "markdown" in lowered or "readme" in lowered:
+        return "markdown"
+    if ".txt" in lowered or "text/plain" in lowered:
+        return "text"
+    if "repository" in lowered or "repo" in lowered:
+        return "repository"
     return fallback_type
 
 
@@ -601,6 +623,101 @@ def _extract_servicepublic_results(soup: BeautifulSoup, base_url: str, profile: 
     return extracted
 
 
+def _extract_arxiv_results(soup: BeautifulSoup, base_url: str, profile: DiscoveryProfile) -> list[dict[str, str]]:
+    nodes = _select_result_nodes(soup, profile.result_selectors)
+    extracted: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+
+    for node in nodes:
+        abstract_link = node.select_one("p.title a[href], .list-title a[href], a[href*='/abs/'], a[href]")
+        pdf_link = node.select_one("a[href*='/pdf/'], a[href$='.pdf']")
+        chosen_link = pdf_link or abstract_link
+        if chosen_link is None:
+            continue
+
+        href = (chosen_link.get("href") or "").strip()
+        if not _is_candidate_href(href):
+            continue
+
+        absolute_url = urljoin(base_url, href)
+        if absolute_url in seen_urls:
+            continue
+
+        title = _extract_title(node, abstract_link or chosen_link)
+        if not title:
+            continue
+
+        snippet = _join_text_snippets(
+            node,
+            (
+                ".abstract",
+                ".authors",
+                "p",
+            ),
+        ) or profile.snippet_hint
+
+        extracted.append(
+            _build_remote_result(
+                source_url=absolute_url,
+                title=title,
+                snippet=snippet,
+                fallback_type="pdf" if pdf_link is not None else profile.document_type,
+                domain=profile.domain,
+            )
+        )
+        seen_urls.add(absolute_url)
+
+    return extracted
+
+
+def _extract_github_results(soup: BeautifulSoup, base_url: str, profile: DiscoveryProfile) -> list[dict[str, str]]:
+    nodes = _select_result_nodes(soup, profile.result_selectors)
+    extracted: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+
+    for node in nodes:
+        repo_link = node.select_one(
+            "a.v-align-middle[href], a[data-testid='result-list-item-title'][href], .search-title a[href], a[href]"
+        )
+        if repo_link is None:
+            continue
+
+        href = (repo_link.get("href") or "").strip()
+        if not _is_candidate_href(href) or not _looks_like_github_repo_href(href):
+            continue
+
+        absolute_url = urljoin(base_url, href)
+        if absolute_url in seen_urls:
+            continue
+
+        title = _extract_title(node, repo_link)
+        if not title:
+            continue
+
+        snippet = _join_text_snippets(
+            node,
+            (
+                "p.mb-1",
+                ".search-match",
+                ".color-fg-muted",
+                "p",
+            ),
+        ) or profile.snippet_hint
+
+        extracted.append(
+            _build_remote_result(
+                source_url=absolute_url,
+                title=title,
+                snippet=snippet,
+                fallback_type="repository",
+                domain=profile.domain,
+            )
+        )
+        seen_urls.add(absolute_url)
+
+    return extracted
+
+
 def _build_remote_result(
     *,
     source_url: str,
@@ -631,8 +748,60 @@ def _join_text_snippets(node: BeautifulSoup, selectors: tuple[str, ...]) -> str:
     return " ".join(snippets[:3])
 
 
+def _requested_document_types(query: Query) -> set[str]:
+    return {document_type.strip().lower() for document_type in (query.document_types or []) if document_type.strip()}
+
+
+def _matches_requested_types(document_type: str, requested_types: set[str]) -> bool:
+    if not requested_types:
+        return True
+    lowered = document_type.lower()
+    aliases = {
+        "md": "markdown",
+        "txt": "text",
+        "repo": "repository",
+    }
+    normalized = aliases.get(lowered, lowered)
+    expanded = {normalized}
+    if normalized == "repository":
+        expanded.add("web")
+    return any(candidate in requested_types for candidate in expanded)
+
+
+def _filter_candidates_by_type(candidates: list[dict[str, object]], requested_types: set[str]) -> list[dict[str, object]]:
+    if not requested_types:
+        return candidates
+    filtered = [
+        candidate
+        for candidate in candidates
+        if _matches_requested_types(str(candidate.get("document_type", "")), requested_types)
+    ]
+    return filtered or candidates
+
+
+def _preferred_fallback_type(default_type: str, requested_types: set[str]) -> str:
+    if not requested_types:
+        return default_type
+    for candidate_type in ("pdf", "docx", "markdown", "text", "repository", "web"):
+        if candidate_type in requested_types:
+            return candidate_type
+    return default_type
+
+
+def _looks_like_github_repo_href(href: str) -> bool:
+    path = urlparse(urljoin("https://github.com", href)).path.strip("/")
+    segments = [segment for segment in path.split("/") if segment]
+    if len(segments) < 2:
+        return False
+    if segments[0] in {"orgs", "topics", "search", "marketplace", "sponsors", "settings"}:
+        return False
+    return all(segment not in {"issues", "pulls", "actions", "commits"} for segment in segments[:3])
+
+
 DOMAIN_RESULT_EXTRACTORS: dict[str, Callable[[BeautifulSoup, str, DiscoveryProfile], list[dict[str, str]]]] = {
+    "arxiv.org": _extract_arxiv_results,
     "eur-lex.europa.eu": _extract_eurlex_results,
+    "github.com": _extract_github_results,
     "data.gouv.fr": _extract_datagouv_results,
     "legifrance.gouv.fr": _extract_legifrance_results,
     "hal.science": _extract_hal_results,

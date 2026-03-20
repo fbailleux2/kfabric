@@ -109,6 +109,8 @@ def test_web_views_render(client):
     home = client.get("/")
     assert home.status_code == 200
     assert "KFabric" in home.text
+    assert 'rel="icon" href="/static/favicon.svg"' in home.text
+    assert "alpinejs" not in home.text
 
     response = client.post(
         "/web/queries",
@@ -124,6 +126,13 @@ def test_web_views_render(client):
     dashboard = client.get(response.headers["location"])
     assert dashboard.status_code == 200
     assert "Documents candidats" in dashboard.text
+
+
+def test_favicon_redirects_to_svg_asset(client):
+    response = client.get("/favicon.ico", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/static/favicon.svg"
 
 
 def test_web_corpus_export_views(client):

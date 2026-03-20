@@ -166,8 +166,12 @@ def serialize_tool_run(tool_run: ToolRun) -> ToolRunResponse:
         run_id=tool_run.id,
         tool_name=tool_run.tool_name,
         status=tool_run.status or ToolRunStatus.QUEUED,
+        input=tool_run.input_payload or {},
         output=tool_run.output_payload,
+        error=tool_run.error_payload,
         trace_id=tool_run.trace_id,
+        created_at=tool_run.created_at,
+        updated_at=tool_run.updated_at,
     )
 
 

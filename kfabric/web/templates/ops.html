@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}KFabric | Ops{% endblock %}
+{% block content %}
+<section class="dashboard-hero">
+  <div>
+    <p class="eyebrow">Exploitation</p>
+    <h1>Console opérateur</h1>
+    <p class="lede">
+      Suivi runtime, connecteurs distants, tâches longues et audit récent.
+    </p>
+  </div>
+  <div class="stats-strip">
+    <div><strong>{{ runtime_status.status }}</strong><span>readiness</span></div>
+    <div><strong>{{ "on" if settings.remote_discovery_enabled else "off" }}</strong><span>discovery live</span></div>
+    <div><strong>{{ "on" if settings.remote_collection_enabled else "off" }}</strong><span>collecte live</span></div>
+    <div><strong>{{ recent_runs|length }}</strong><span>runs visibles</span></div>
+  </div>
+</section>
+
+<section class="dashboard-grid">
+  <article class="panel span-2">
+    <div class="panel-head">
+      <h2>Dépendances</h2>
+      <span>{{ runtime_status.dependencies|length }} checks</span>
+    </div>
+    <div class="stack-list">
+      {% for name, dependency in runtime_status.dependencies.items() %}
+        <div class="stack-item">
+          <div class="between">
+            <strong>{{ name }}</strong>
+            <span class="status-pill {{ dependency.status }}">{{ dependency.status }}</span>
+          </div>
+          <p>{{ dependency.target }}</p>
+          <small>{{ dependency.latency_ms }} ms{% if dependency.detail %} • {{ dependency.detail }}{% endif %}</small>
+        </div>
+      {% endfor %}
+    </div>
+  </article>
+
+  <article class="panel span-2">
+    <div class="panel-head">
+      <h2>Tâches longues</h2>
+      <span>{{ recent_runs|length }} runs</span>
+    </div>
+    <div class="stack-list">
+      {% for run in recent_runs %}
+        <div class="stack-item">
+          <div class="between">
+            <strong>{{ run.tool_name }}</strong>
+            <span class="status-pill {{ run.status }}">{{ run.status }}</span>
+          </div>
+          <p>{{ run.input_payload }}</p>
+          <small>Trace {{ run.trace_id }} • maj {{ run.updated_at.strftime("%Y-%m-%d %H:%M:%S") }}</small>
+        </div>
+      {% else %}
+        <div class="empty-card">Aucune exécution longue récente.</div>
+      {% endfor %}
+    </div>
+  </article>
+
+  <article class="panel span-2">
+    <div class="panel-head">
+      <h2>Connecteurs engagés</h2>
+      <span>première tranche</span>
+    </div>
+    <div class="stack-list">
+      <div class="stack-item">
+        <strong>Discovery live</strong>
+        <p>Résultats spécialisés ajoutés pour arXiv et GitHub, plus filtrage par type documentaire demandé.</p>
+      </div>
+      <div class="stack-item">
+        <strong>Collecte et parsing</strong>
+        <p>Support markdown explicite et premiers parseurs HTML spécialisés pour GitHub et arXiv.</p>
+      </div>
+      <div class="stack-item">
+        <strong>Scoring</strong>
+        <p>Scoring tenant compte du type de document, de la structure, des signaux factuels et de la cible de qualité.</p>
+      </div>
+    </div>
+  </article>
+
+  <article class="panel span-2">
+    <div class="panel-head">
+      <h2>Audit récent</h2>
+      <span>{{ recent_events|length }} événements</span>
+    </div>
+    <div class="stack-list">
+      {% for event in recent_events %}
+        <div class="stack-item">
+          <div class="between">
+            <strong>{{ event.event_type }}</strong>
+            <span>{{ event.actor }}</span>
+          </div>
+          <p>{{ event.entity_type }} • {{ event.entity_id }}</p>
+          <small>{{ event.created_at.strftime("%Y-%m-%d %H:%M:%S") }} • {{ event.trace_id }}</small>
+        </div>
+      {% else %}
+        <div class="empty-card">Aucun événement d’audit disponible.</div>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+{% endblock %}

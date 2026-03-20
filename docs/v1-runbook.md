@@ -13,16 +13,29 @@ mono-noeud avec Docker Compose.
 export KFABRIC_API_KEY="change-me"
 ```
 
+3. Vérifier que le mode async broker-only est bien actif :
+
+```bash
+export KFABRIC_PREFER_CELERY_TASKS="true"
+export KFABRIC_CELERY_ALWAYS_EAGER="false"
+```
+
 ## Démarrer la stack
 
 ```bash
 make stack-up
 ```
 
+La stack Docker force les URLs internes des dépendances vers `postgres`,
+`redis`, `rabbitmq` et `qdrant`. Les valeurs `localhost` éventuelles de `.env`
+restent donc adaptées au lancement hors Docker sans casser Compose.
+
 Services principaux :
 
 - API KFabric : `http://127.0.0.1:8001`
 - Swagger : `http://127.0.0.1:8001/docs`
+- UI KFabric : `http://127.0.0.1:8001/`
+- Worker Celery KFabric : via le service `worker`
 - RabbitMQ management : `http://127.0.0.1:15672`
 - Qdrant : `http://127.0.0.1:6333`
 
@@ -46,6 +59,16 @@ La readiness renvoie :
   principales répondent
 - `degraded` si le coeur est opérationnel mais qu'un service secondaire manque
 - `not_ready` si la base ou le stockage ne sont pas exploitables
+
+Pour vérifier spécifiquement l'async broker-only :
+
+```bash
+docker-compose ps
+docker-compose logs -f api worker rabbitmq
+```
+
+Si RabbitMQ ou le worker ne sont pas disponibles, les appels `async` échouent
+immédiatement avec un `ToolRun` en statut `failed`.
 
 ## Commandes utiles
 

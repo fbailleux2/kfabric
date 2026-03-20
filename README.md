@@ -107,7 +107,32 @@ Commandes utiles via [`Makefile`](Makefile) :
 make install-extended
 make test
 make run-api
+make stack-up
 ```
+
+## Async broker-only
+
+Les traitements asynchrones de KFabric fonctionnent maintenant en mode
+broker-only :
+
+- les routes et boutons `async` doivent être dispatchés via Celery
+- RabbitMQ et Redis doivent être disponibles
+- le worker KFabric doit être lancé
+- il n'existe plus de fallback local en thread si le broker ne répond pas
+
+Variables recommandées dans [`.env.example`](.env.example) :
+
+```bash
+KFABRIC_PREFER_CELERY_TASKS=true
+KFABRIC_CELERY_ALWAYS_EAGER=false
+```
+
+Dans `docker-compose.yml`, les services KFabric utilisent toujours les hôtes
+internes `postgres`, `redis`, `rabbitmq` et `qdrant`, même si ton fichier
+`.env` contient des URLs `localhost` pour un lancement hors Docker.
+
+En environnement de test, `KFABRIC_CELERY_ALWAYS_EAGER=true` reste utile pour
+exécuter les tâches immédiatement sans broker externe.
 
 ## Exploitation V1
 
@@ -116,6 +141,7 @@ KFabric dispose maintenant d'un mode d'exploitation local plus stable :
 - `docker-compose.yml` avec migrations, healthchecks et volume de stockage
 - `Makefile` pour les commandes courantes
 - `readiness` détaillée sur `/api/v1/readiness`
+- mode async broker-only avec worker Celery dédié
 
 Le runbook dédié est disponible dans [`docs/v1-runbook.md`](docs/v1-runbook.md).
 
@@ -198,12 +224,17 @@ KFabric expose deux surfaces complémentaires :
 
 Exemples de capacités exposées :
 
+- `create_query`
 - `discover_documents`
 - `list_candidates`
+- `collect_candidate`
 - `analyze_document`
 - `accept_document`
 - `reject_document`
+- `consolidate_fragments`
 - `generate_fragment_synthesis`
+- `build_corpus`
+- `prepare_index`
 - `get_corpus_status`
 
 ## Statut du projet

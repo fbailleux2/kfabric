@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from kfabric.config import get_settings
 from kfabric.infra.db import get_session_factory
+from kfabric.mcp.registry import execute_enqueued_tool
 from kfabric.services.orchestrator import Orchestrator
 from kfabric.workers.celery_app import celery_app
 
@@ -72,3 +73,27 @@ def prepare_index(corpus_id: str) -> dict[str, object]:
         return orchestrator.prepare_index(corpus_id)
     finally:
         orchestrator.session.close()
+
+
+@celery_app.task(name="kfabric.run_tool")
+def run_tool(
+    run_id: str,
+    tool_name: str,
+    arguments: dict[str, object],
+    session_id: str | None = None,
+    user_id: str | None = None,
+    auth_mode: str = "anonymous",
+    is_system: bool = False,
+    database_url: str | None = None,
+) -> str:
+    execute_enqueued_tool(
+        run_id,
+        tool_name,
+        dict(arguments),
+        session_id,
+        database_url or get_settings().database_url,
+        user_id,
+        auth_mode,
+        is_system,
+    )
+    return run_id

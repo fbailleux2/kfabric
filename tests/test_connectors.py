@@ -217,6 +217,75 @@ def test_discovery_extracts_hal_specific_results(monkeypatch):
     assert "Resume scientifique" in candidates[0]["snippet"]
 
 
+def test_discovery_extracts_arxiv_specific_results(monkeypatch):
+    query = Query(
+        theme="Embeddings documentaires",
+        question="Quels papiers techniques recuperer ?",
+        keywords=["embeddings", "retrieval"],
+        preferred_domains=["arxiv.org"],
+        language="fr",
+        expansion_text="embeddings retrieval papers",
+    )
+    settings = AppSettings(remote_discovery_enabled=True)
+
+    def fake_get(*args, **kwargs):
+        html = """
+        <html>
+          <body>
+            <li class="arxiv-result">
+              <p class="title"><a href="/abs/2501.01234">Structured retrieval with corpus-first evidence</a></p>
+              <p class="abstract">A practical paper about retrieval pipelines, evidence preservation and chunking.</p>
+              <a href="/pdf/2501.01234.pdf">PDF</a>
+            </li>
+          </body>
+        </html>
+        """
+        return httpx.Response(200, headers={"content-type": "text/html"}, text=html)
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    candidates = discover_candidates(query, settings=settings)
+
+    assert len(candidates) == 1
+    assert candidates[0]["source_url"] == "https://arxiv.org/pdf/2501.01234.pdf"
+    assert candidates[0]["document_type"] == "pdf"
+    assert "evidence preservation" in candidates[0]["snippet"]
+
+
+def test_discovery_extracts_github_specific_results(monkeypatch):
+    query = Query(
+        theme="Serveur MCP Python",
+        question="Quels depots de reference consulter ?",
+        keywords=["mcp", "python"],
+        preferred_domains=["github.com"],
+        language="fr",
+        expansion_text="mcp python repositories",
+    )
+    settings = AppSettings(remote_discovery_enabled=True)
+
+    def fake_get(*args, **kwargs):
+        html = """
+        <html>
+          <body>
+            <div class="repo-list-item">
+              <a class="v-align-middle" href="/openai/openai-python">openai/openai-python</a>
+              <p class="mb-1">Python SDK with MCP-oriented tooling, examples and structured responses.</p>
+            </div>
+          </body>
+        </html>
+        """
+        return httpx.Response(200, headers={"content-type": "text/html"}, text=html)
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    candidates = discover_candidates(query, settings=settings)
+
+    assert len(candidates) == 1
+    assert candidates[0]["source_url"] == "https://github.com/openai/openai-python"
+    assert candidates[0]["document_type"] == "repository"
+    assert "structured responses" in candidates[0]["snippet"]
+
+
 def test_discovery_extracts_legifrance_specific_results(monkeypatch):
     query = Query(
         theme="Savon artisanal",
@@ -376,6 +445,63 @@ def test_collect_document_resolves_eurlex_search_page_to_pdf(monkeypatch):
     assert unpack_binary_payload(payload["raw_content"]) is not None
 
 
+def test_collect_document_resolves_arxiv_search_page_to_pdf(monkeypatch):
+    candidate = CandidateDocument(
+        source_url="https://arxiv.org/search/?query=corpus&searchtype=all&source=header",
+        title="Recherche arXiv",
+        snippet="",
+        domain="arxiv.org",
+        document_type="web",
+        language="fr",
+        discovery_rank=1,
+        discovery_source="targeted_domain_search",
+    )
+    query = Query(theme="Corpus", question="Question", keywords=[], language="fr")
+    settings = AppSettings(remote_collection_enabled=True)
+
+    def fake_get(url, *args, **kwargs):
+        if "/search/?" in url or "searchtype=all" in url:
+            html = """
+            <html>
+              <body>
+                <li class="arxiv-result">
+                  <p class="title"><a href="/abs/2501.01234">Structured retrieval with evidence</a></p>
+                </li>
+              </body>
+            </html>
+            """
+            return httpx.Response(200, headers={"content-type": "text/html"}, text=html, request=httpx.Request("GET", url))
+        if "/abs/" in url:
+            html = """
+            <html>
+              <body>
+                <main>
+                  <h1 class="title">Structured retrieval with evidence</h1>
+                  <blockquote class="abstract">Abstract: Practical work on evidence retention.</blockquote>
+                  <a href="/pdf/2501.01234.pdf">PDF</a>
+                </main>
+              </body>
+            </html>
+            """
+            return httpx.Response(200, headers={"content-type": "text/html"}, text=html, request=httpx.Request("GET", url))
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/pdf"},
+            content=SIMPLE_PDF_BYTES,
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    payload = collect_document(candidate, query, settings)
+
+    assert candidate.source_url == "https://arxiv.org/abs/2501.01234"
+    assert candidate.title == "Structured retrieval with evidence"
+    assert candidate.document_type == "pdf"
+    assert payload["content_type"] == "application/pdf"
+    assert payload["collection_method"] == "arxiv_org_resource_connector"
+
+
 def test_collect_document_enriches_servicepublic_html_candidate(monkeypatch):
     candidate = CandidateDocument(
         source_url="https://www.service-public.fr/professionnels-entreprises/vosdroits/F35732",
@@ -413,6 +539,49 @@ def test_collect_document_enriches_servicepublic_html_candidate(monkeypatch):
     assert candidate.title == "Demarches pour la mise sur le marche"
     assert "obligations administratives" in candidate.snippet
     assert payload["collection_method"] == "service_public_fr_html_connector"
+    assert payload["content_type"] == "text/html"
+
+
+def test_collect_document_enriches_github_repository_page(monkeypatch):
+    candidate = CandidateDocument(
+        source_url="https://github.com/openai/openai-python",
+        title="Titre recherche",
+        snippet="Snippet court",
+        domain="github.com",
+        document_type="repository",
+        language="fr",
+        discovery_rank=1,
+        discovery_source="remote_search_connector",
+    )
+    query = Query(theme="MCP", question="Question", keywords=[], language="fr")
+    settings = AppSettings(remote_collection_enabled=True)
+
+    def fake_get(url, *args, **kwargs):
+        html = """
+        <html>
+          <head>
+            <meta property="og:title" content="openai/openai-python" />
+            <meta name="description" content="SDK Python avec exemples, structured outputs et integrations MCP." />
+          </head>
+          <body>
+            <main>
+              <article id="readme" class="markdown-body">
+                <h1>OpenAI Python</h1>
+                <p>Build API clients and MCP-compatible workflows in Python.</p>
+              </article>
+            </main>
+          </body>
+        </html>
+        """
+        return httpx.Response(200, headers={"content-type": "text/html"}, text=html, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    payload = collect_document(candidate, query, settings)
+
+    assert candidate.title == "openai/openai-python"
+    assert "structured outputs" in candidate.snippet
+    assert payload["collection_method"] == "github_com_html_connector"
     assert payload["content_type"] == "text/html"
 
 
@@ -695,3 +864,47 @@ def test_parse_document_extracts_docx_text():
 
     assert parsed["extraction_method"] in {"docx", "docx_fallback"}
     assert "Conformite cosmetique" in parsed["normalized_text"]
+
+
+def test_parse_document_extracts_markdown_text():
+    candidate = CandidateDocument(
+        source_url="https://github.com/demo/repo/blob/main/README.md",
+        title="README fallback",
+        snippet="",
+        domain="github.com",
+        document_type="markdown",
+        language="fr",
+        discovery_rank=1,
+        discovery_source="test",
+    )
+    raw_markdown = """
+    # Guide corpus-first
+
+    ## Pipeline
+
+    - Collecte distante
+    - Sauvetage de fragments
+    - Preparation d'index
+    """
+
+    parsed = parse_document(raw_markdown, "text/markdown", candidate)
+
+    assert parsed["extraction_method"] == "markdown"
+    assert parsed["extracted_title"] == "Guide corpus-first"
+    assert "Pipeline" in parsed["headings"]
+
+
+def test_discovery_filters_requested_document_types():
+    query = Query(
+        theme="Corpus technique",
+        question="Quels PDF prioriser ?",
+        keywords=["corpus", "pdf"],
+        preferred_domains=["github.com"],
+        document_types=["pdf"],
+        language="fr",
+        expansion_text="corpus technique pdf",
+    )
+
+    candidates = discover_candidates(query)
+
+    assert candidates[0]["document_type"] == "pdf"

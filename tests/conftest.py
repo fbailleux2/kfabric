@@ -13,15 +13,18 @@ def app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("KFABRIC_DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setenv("KFABRIC_STORAGE_PATH", str(storage_path))
     monkeypatch.setenv("KFABRIC_ENABLE_MCP", "true")
+    monkeypatch.setenv("KFABRIC_CELERY_ALWAYS_EAGER", "true")
     monkeypatch.setenv("KFABRIC_REMOTE_DISCOVERY_ENABLED", "false")
     monkeypatch.setenv("KFABRIC_REMOTE_COLLECTION_ENABLED", "false")
 
     from kfabric.config import get_settings
     from kfabric.infra.db import get_engine, get_session_factory
+    from kfabric.workers.celery_app import configure_celery_app
 
     get_settings.cache_clear()
     get_engine.cache_clear()
     get_session_factory.cache_clear()
+    configure_celery_app()
 
     from kfabric.api.app import create_app
 

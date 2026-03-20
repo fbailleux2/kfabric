@@ -53,11 +53,11 @@ services:
     environment:
       KFABRIC_ENV: ${KFABRIC_ENV:-development}
       KFABRIC_APP_NAME: ${KFABRIC_APP_NAME:-KFabric}
-      KFABRIC_DATABASE_URL: ${KFABRIC_DATABASE_URL:-postgresql+psycopg://kfabric:kfabric@postgres:5432/kfabric}
-      KFABRIC_REDIS_URL: ${KFABRIC_REDIS_URL:-redis://redis:6379/0}
-      KFABRIC_RABBITMQ_URL: ${KFABRIC_RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672//}
-      KFABRIC_QDRANT_URL: ${KFABRIC_QDRANT_URL:-http://qdrant:6333}
-      KFABRIC_STORAGE_PATH: ${KFABRIC_STORAGE_PATH:-/app/storage}
+      KFABRIC_DATABASE_URL: postgresql+psycopg://kfabric:kfabric@postgres:5432/kfabric
+      KFABRIC_REDIS_URL: redis://redis:6379/0
+      KFABRIC_RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672//
+      KFABRIC_QDRANT_URL: http://qdrant:6333
+      KFABRIC_STORAGE_PATH: /app/storage
       KFABRIC_API_KEY: ${KFABRIC_API_KEY:-}
       KFABRIC_ENABLE_MCP: ${KFABRIC_ENABLE_MCP:-true}
       KFABRIC_ENABLE_METRICS: ${KFABRIC_ENABLE_METRICS:-true}
@@ -74,11 +74,11 @@ services:
     environment:
       KFABRIC_ENV: ${KFABRIC_ENV:-development}
       KFABRIC_APP_NAME: ${KFABRIC_APP_NAME:-KFabric}
-      KFABRIC_DATABASE_URL: ${KFABRIC_DATABASE_URL:-postgresql+psycopg://kfabric:kfabric@postgres:5432/kfabric}
-      KFABRIC_REDIS_URL: ${KFABRIC_REDIS_URL:-redis://redis:6379/0}
-      KFABRIC_RABBITMQ_URL: ${KFABRIC_RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672//}
-      KFABRIC_QDRANT_URL: ${KFABRIC_QDRANT_URL:-http://qdrant:6333}
-      KFABRIC_STORAGE_PATH: ${KFABRIC_STORAGE_PATH:-/app/storage}
+      KFABRIC_DATABASE_URL: postgresql+psycopg://kfabric:kfabric@postgres:5432/kfabric
+      KFABRIC_REDIS_URL: redis://redis:6379/0
+      KFABRIC_RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672//
+      KFABRIC_QDRANT_URL: http://qdrant:6333
+      KFABRIC_STORAGE_PATH: /app/storage
       KFABRIC_API_KEY: ${KFABRIC_API_KEY:-}
       KFABRIC_ENABLE_MCP: ${KFABRIC_ENABLE_MCP:-true}
       KFABRIC_ENABLE_METRICS: ${KFABRIC_ENABLE_METRICS:-true}
@@ -114,11 +114,11 @@ services:
     environment:
       KFABRIC_ENV: ${KFABRIC_ENV:-development}
       KFABRIC_APP_NAME: ${KFABRIC_APP_NAME:-KFabric}
-      KFABRIC_DATABASE_URL: ${KFABRIC_DATABASE_URL:-postgresql+psycopg://kfabric:kfabric@postgres:5432/kfabric}
-      KFABRIC_REDIS_URL: ${KFABRIC_REDIS_URL:-redis://redis:6379/0}
-      KFABRIC_RABBITMQ_URL: ${KFABRIC_RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672//}
-      KFABRIC_QDRANT_URL: ${KFABRIC_QDRANT_URL:-http://qdrant:6333}
-      KFABRIC_STORAGE_PATH: ${KFABRIC_STORAGE_PATH:-/app/storage}
+      KFABRIC_DATABASE_URL: postgresql+psycopg://kfabric:kfabric@postgres:5432/kfabric
+      KFABRIC_REDIS_URL: redis://redis:6379/0
+      KFABRIC_RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672//
+      KFABRIC_QDRANT_URL: http://qdrant:6333
+      KFABRIC_STORAGE_PATH: /app/storage
       KFABRIC_API_KEY: ${KFABRIC_API_KEY:-}
       KFABRIC_ENABLE_MCP: ${KFABRIC_ENABLE_MCP:-true}
       KFABRIC_ENABLE_METRICS: ${KFABRIC_ENABLE_METRICS:-true}

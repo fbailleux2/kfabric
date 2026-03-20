@@ -34,6 +34,8 @@ def parse_document(raw_content: str, content_type: str, candidate: CandidateDocu
     binary_payload = unpack_binary_payload(raw_content)
     if binary_payload:
         extracted_title, text, headings, extraction_method = _parse_binary_payload(binary_payload, candidate)
+    elif "markdown" in content_type or _looks_like_markdown(raw_content):
+        extracted_title, text, headings, extraction_method = _parse_markdown_document(raw_content, candidate)
     elif "html" in content_type or _looks_like_html(raw_content):
         extracted_title, text, headings, extraction_method = _parse_html_document(raw_content, candidate)
     else:
@@ -55,8 +57,9 @@ def parse_document(raw_content: str, content_type: str, candidate: CandidateDocu
 def _extract_markdown_headings(raw_content: str) -> list[str]:
     headings: list[str] = []
     for line in raw_content.splitlines():
-        if line.startswith("#"):
-            headings.append(line.lstrip("# ").strip())
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            headings.append(stripped.lstrip("# ").strip())
     return headings[:12]
 
 
@@ -201,6 +204,12 @@ def _parse_text_document(raw_content: str, candidate: CandidateDocument) -> tupl
     return candidate.title, raw_content, _extract_markdown_headings(raw_content) or _extract_candidate_headings(raw_content), "plain_text"
 
 
+def _parse_markdown_document(raw_content: str, candidate: CandidateDocument) -> tuple[str, str, list[str], str]:
+    headings = _extract_markdown_headings(raw_content)
+    extracted_title = headings[0] if headings else candidate.title
+    return extracted_title, raw_content, headings or _extract_candidate_headings(raw_content), "markdown"
+
+
 def _extract_html_headings(soup: BeautifulSoup) -> list[str]:
     headings: list[str] = []
     for tag in soup.find_all(["h1", "h2", "h3"]):
@@ -243,11 +252,28 @@ def _looks_like_html(raw_content: str) -> bool:
     return "<html" in sample or "<body" in sample or "<article" in sample or "<main" in sample
 
 
+def _looks_like_markdown(raw_content: str) -> bool:
+    lines = [line.strip() for line in raw_content.splitlines()[:24] if line.strip()]
+    if not lines:
+        return False
+    markdown_markers = sum(
+        1
+        for line in lines
+        if line.startswith("#")
+        or line.startswith(("- ", "* "))
+        or line.startswith("```")
+        or ("[" in line and "](" in line)
+    )
+    return markdown_markers >= 2
+
+
 def _parse_source_specific_html(
     soup: BeautifulSoup,
     candidate: CandidateDocument,
     fallback_title: str,
 ) -> tuple[str, str, list[str], str] | None:
+    if candidate.domain.lower() == "arxiv.org":
+        return _parse_arxiv_html(soup, fallback_title)
     domain = candidate.domain.lower()
     if domain == "eur-lex.europa.eu":
         return _parse_eurlex_html(soup, fallback_title)
@@ -259,7 +285,61 @@ def _parse_source_specific_html(
         return _parse_hal_html(soup, fallback_title)
     if domain == "service-public.fr":
         return _parse_servicepublic_html(soup, fallback_title)
+    if domain == "github.com":
+        return _parse_github_html(soup, fallback_title)
     return None
+
+
+def _parse_arxiv_html(soup: BeautifulSoup, fallback_title: str) -> tuple[str, str, list[str], str] | None:
+    title = _text_from_selectors(
+        soup,
+        (
+            "h1.title",
+            ".title.mathjax",
+            "main h1",
+            "h1",
+        ),
+    ) or fallback_title
+    scope = soup.select_one("main, article, #abs")
+    if scope is None:
+        return None
+
+    authors = _text_from_selectors(scope, (".authors", ".authors a", "p"))
+    abstract = _text_from_selectors(scope, (".abstract", "blockquote.abstract", "p"))
+    text_parts = [title]
+    if authors:
+        text_parts.append("Auteurs : " + authors.replace("Authors:", "").strip())
+    if abstract:
+        text_parts.append("Resume : " + abstract.replace("Abstract:", "").strip())
+    text_parts.append(scope.get_text("\n", strip=True))
+    headings = _extract_html_headings(scope if isinstance(scope, BeautifulSoup) else soup)
+    return title, "\n\n".join(part for part in text_parts if part), headings, "arxiv_html"
+
+
+def _parse_github_html(soup: BeautifulSoup, fallback_title: str) -> tuple[str, str, list[str], str] | None:
+    title = _text_from_selectors(
+        soup,
+        (
+            "strong[itemprop='name'] a",
+            "meta[property='og:title']",
+            "main h1",
+            "h1",
+        ),
+    ) or fallback_title
+    scope = soup.select_one("article.markdown-body, #readme, main")
+    if scope is None:
+        return None
+
+    lead = _text_from_selectors(scope, ("p", "article.markdown-body p"))
+    useful_links = _collect_link_labels(scope, ("article.markdown-body a[href]", "#readme a[href]", "a[href]"))
+    text_parts = [title]
+    if lead:
+        text_parts.append(lead)
+    if useful_links:
+        text_parts.append("Liens utiles : " + ", ".join(useful_links[:6]))
+    text_parts.append(scope.get_text("\n", strip=True))
+    headings = _extract_html_headings(scope if isinstance(scope, BeautifulSoup) else soup)
+    return title, "\n\n".join(part for part in text_parts if part), headings, "github_html"
 
 
 def _parse_eurlex_html(soup: BeautifulSoup, fallback_title: str) -> tuple[str, str, list[str], str] | None:

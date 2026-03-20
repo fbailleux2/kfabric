@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Response
 
-from kfabric.api.deps import get_orchestrator, require_authenticated_principal
+from kfabric.api.deps import get_db, get_orchestrator, get_runtime_settings, require_authenticated_principal
 from kfabric.api.serializers import (
     serialize_analysis,
     serialize_candidate,
@@ -14,6 +14,7 @@ from kfabric.api.serializers import (
     serialize_prepare_index,
     serialize_query,
     serialize_synthesis,
+    serialize_tool_run,
 )
 from kfabric.domain.schemas import (
     AnalyzeDocumentResponse,
@@ -29,7 +30,9 @@ from kfabric.domain.schemas import (
     QueryResponse,
     SynthesisCreateRequest,
     SynthesisResponse,
+    ToolRunResponse,
 )
+from kfabric.mcp.registry import enqueue_tool
 from kfabric.services.corpus_export import export_filename, render_corpus_html
 from kfabric.services.orchestrator import Orchestrator
 
@@ -52,6 +55,17 @@ def discover_query(query_id: str, orchestrator: Orchestrator = Depends(get_orche
     return [serialize_candidate(candidate) for candidate in orchestrator.discover(query_id)]
 
 
+@router.post("/queries/{query_id}:discover-async", response_model=ToolRunResponse)
+def discover_query_async(
+    query_id: str,
+    db=Depends(get_db),
+    settings=Depends(get_runtime_settings),
+    principal=Depends(require_authenticated_principal),
+) -> ToolRunResponse:
+    run = enqueue_tool(db, settings, principal, "discover_documents", {"query_id": query_id})
+    return serialize_tool_run(run)
+
+
 @router.get("/queries/{query_id}/candidates", response_model=list[CandidateResponse])
 def list_candidates(query_id: str, orchestrator: Orchestrator = Depends(get_orchestrator)) -> list[CandidateResponse]:
     return [serialize_candidate(candidate) for candidate in orchestrator.list_candidates(query_id)]
@@ -63,10 +77,32 @@ def collect_candidate(candidate_id: str, orchestrator: Orchestrator = Depends(ge
     return serialize_collect(candidate_id, collected)
 
 
+@router.post("/candidates/{candidate_id}:collect-async", response_model=ToolRunResponse)
+def collect_candidate_async(
+    candidate_id: str,
+    db=Depends(get_db),
+    settings=Depends(get_runtime_settings),
+    principal=Depends(require_authenticated_principal),
+) -> ToolRunResponse:
+    run = enqueue_tool(db, settings, principal, "collect_candidate", {"candidate_id": candidate_id})
+    return serialize_tool_run(run)
+
+
 @router.post("/documents/{document_id}:analyze", response_model=AnalyzeDocumentResponse)
 def analyze_document(document_id: str, orchestrator: Orchestrator = Depends(get_orchestrator)) -> AnalyzeDocumentResponse:
     result = orchestrator.analyze_document(document_id)
     return serialize_analysis(result["parsed_document"], result["score"], result["decision"], result["fragments"])
+
+
+@router.post("/documents/{document_id}:analyze-async", response_model=ToolRunResponse)
+def analyze_document_async(
+    document_id: str,
+    db=Depends(get_db),
+    settings=Depends(get_runtime_settings),
+    principal=Depends(require_authenticated_principal),
+) -> ToolRunResponse:
+    run = enqueue_tool(db, settings, principal, "analyze_document", {"document_id": document_id})
+    return serialize_tool_run(run)
 
 
 @router.post("/documents/{document_id}:accept", response_model=DecisionOverrideResponse)
@@ -95,6 +131,17 @@ def consolidate_fragments(
     return [serialize_cluster(cluster) for cluster in clusters]
 
 
+@router.post("/fragments:consolidate-async", response_model=ToolRunResponse)
+def consolidate_fragments_async(
+    payload: FragmentConsolidateRequest,
+    db=Depends(get_db),
+    settings=Depends(get_runtime_settings),
+    principal=Depends(require_authenticated_principal),
+) -> ToolRunResponse:
+    run = enqueue_tool(db, settings, principal, "consolidate_fragments", {"query_id": payload.query_id})
+    return serialize_tool_run(run)
+
+
 @router.post("/syntheses", response_model=SynthesisResponse)
 def create_synthesis(
     payload: SynthesisCreateRequest,
@@ -103,9 +150,37 @@ def create_synthesis(
     return serialize_synthesis(orchestrator.create_synthesis(payload.query_id, payload.fragment_ids))
 
 
+@router.post("/syntheses:async", response_model=ToolRunResponse)
+def create_synthesis_async(
+    payload: SynthesisCreateRequest,
+    db=Depends(get_db),
+    settings=Depends(get_runtime_settings),
+    principal=Depends(require_authenticated_principal),
+) -> ToolRunResponse:
+    run = enqueue_tool(
+        db,
+        settings,
+        principal,
+        "generate_fragment_synthesis",
+        {"query_id": payload.query_id, "fragment_ids": payload.fragment_ids},
+    )
+    return serialize_tool_run(run)
+
+
 @router.post("/queries/{query_id}:build-corpus", response_model=CorpusResponse)
 def build_corpus(query_id: str, orchestrator: Orchestrator = Depends(get_orchestrator)) -> CorpusResponse:
     return serialize_corpus(orchestrator.build_corpus(query_id))
+
+
+@router.post("/queries/{query_id}:build-corpus-async", response_model=ToolRunResponse)
+def build_corpus_async(
+    query_id: str,
+    db=Depends(get_db),
+    settings=Depends(get_runtime_settings),
+    principal=Depends(require_authenticated_principal),
+) -> ToolRunResponse:
+    run = enqueue_tool(db, settings, principal, "build_corpus", {"query_id": query_id})
+    return serialize_tool_run(run)
 
 
 @router.get("/corpora/{corpus_id}:export")
@@ -141,3 +216,14 @@ def prepare_index(corpus_id: str, orchestrator: Orchestrator = Depends(get_orche
     payload = orchestrator.prepare_index(corpus_id)
     corpus = orchestrator.get_corpus(corpus_id)
     return serialize_prepare_index(corpus, payload)
+
+
+@router.post("/corpora/{corpus_id}:prepare-index-async", response_model=ToolRunResponse)
+def prepare_index_async(
+    corpus_id: str,
+    db=Depends(get_db),
+    settings=Depends(get_runtime_settings),
+    principal=Depends(require_authenticated_principal),
+) -> ToolRunResponse:
+    run = enqueue_tool(db, settings, principal, "prepare_index", {"corpus_id": corpus_id})
+    return serialize_tool_run(run)

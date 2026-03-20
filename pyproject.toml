@@ -53,6 +53,9 @@ kfabric-migrate = "kfabric.main:run_migrations"
 where = ["."]
 include = ["kfabric*"]
 
+[tool.setuptools.package-data]
+kfabric = ["web/static/*", "web/templates/*.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

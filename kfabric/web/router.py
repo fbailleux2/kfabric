@@ -1,24 +1,25 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from kfabric.api.deps import WEB_SESSION_COOKIE, get_db, get_orchestrator, require_web_session
+from kfabric.api.deps import WEB_SESSION_COOKIE, get_db, get_orchestrator, require_admin_web_session, require_web_session
 from kfabric.config import get_settings
 from kfabric.domain.schemas import QueryCreate
-from kfabric.infra.models import CandidateDocument, Corpus, FragmentCluster, FragmentSynthesis
+from kfabric.infra.models import AuditEvent, CandidateDocument, Corpus, FragmentCluster, FragmentSynthesis, ToolRun
+from kfabric.infra.runtime_checks import collect_runtime_status
+from kfabric.mcp.registry import enqueue_tool
 from kfabric.services.auth_service import authenticate_user, bootstrap_admin, create_web_session, revoke_web_session
 from kfabric.services.corpus_export import export_filename, render_corpus_html
 from kfabric.services.orchestrator import Orchestrator
+from kfabric.web.paths import resolve_web_path
 
 
 router = APIRouter(include_in_schema=False, dependencies=[Depends(require_web_session)])
-templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
+templates = Jinja2Templates(directory=str(resolve_web_path("templates")))
 
 
 def _split_csv(value: str | None) -> list[str]:
@@ -47,6 +48,7 @@ def _dashboard_context(db: Session, orchestrator: Orchestrator, query_id: str) -
         db.scalars(select(FragmentSynthesis).where(FragmentSynthesis.query_id == query_id).order_by(FragmentSynthesis.created_at.desc()))
     )
     corpora = list(db.scalars(select(Corpus).where(Corpus.query_id == query_id).order_by(Corpus.created_at.desc())))
+    recent_runs = _query_tool_runs(db, query_id=query_id, candidates=candidates, corpora=corpora)
     accepted_count = sum(
         1
         for candidate in candidates
@@ -62,8 +64,43 @@ def _dashboard_context(db: Session, orchestrator: Orchestrator, query_id: str) -
         "clusters": clusters,
         "syntheses": syntheses,
         "corpora": corpora,
+        "recent_runs": recent_runs,
+        "has_pending_runs": any(run.status in {"queued", "running"} for run in recent_runs),
         "accepted_count": accepted_count,
     }
+
+
+def _query_tool_runs(
+    db: Session,
+    *,
+    query_id: str,
+    candidates: list[CandidateDocument],
+    corpora: list[Corpus],
+) -> list[ToolRun]:
+    candidate_ids = {candidate.id for candidate in candidates}
+    collected_ids = {candidate.collected_document.id for candidate in candidates if candidate.collected_document}
+    parsed_ids = {
+        candidate.collected_document.parsed_document.id
+        for candidate in candidates
+        if candidate.collected_document and candidate.collected_document.parsed_document
+    }
+    corpus_ids = {corpus.id for corpus in corpora}
+    recent_runs = list(db.scalars(select(ToolRun).order_by(ToolRun.updated_at.desc()).limit(30)))
+    filtered: list[ToolRun] = []
+    for run in recent_runs:
+        payload = run.input_payload or {}
+        if payload.get("query_id") == query_id:
+            filtered.append(run)
+            continue
+        if payload.get("candidate_id") in candidate_ids:
+            filtered.append(run)
+            continue
+        if payload.get("document_id") in collected_ids or payload.get("document_id") in parsed_ids:
+            filtered.append(run)
+            continue
+        if payload.get("corpus_id") in corpus_ids:
+            filtered.append(run)
+    return filtered[:12]
 
 
 @router.get("/auth", response_class=HTMLResponse)
@@ -204,6 +241,25 @@ def home(request: Request, orchestrator: Orchestrator = Depends(get_orchestrator
     )
 
 
+@router.get("/ops", response_class=HTMLResponse, dependencies=[Depends(require_admin_web_session)])
+def ops_dashboard(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+    settings = get_settings()
+    recent_runs = list(db.scalars(select(ToolRun).order_by(ToolRun.updated_at.desc()).limit(12)))
+    recent_events = list(db.scalars(select(AuditEvent).order_by(AuditEvent.created_at.desc()).limit(12)))
+    runtime_status = collect_runtime_status(settings)
+    return templates.TemplateResponse(
+        request=request,
+        name="ops.html",
+        context={
+            "request": request,
+            "settings": settings,
+            "runtime_status": runtime_status,
+            "recent_runs": recent_runs,
+            "recent_events": recent_events,
+        },
+    )
+
+
 @router.get("/queries/{query_id}", response_class=HTMLResponse)
 def query_dashboard(
     request: Request,
@@ -218,6 +274,7 @@ def query_dashboard(
 
 @router.post("/web/queries")
 def create_query_from_form(
+    request: Request,
     theme: str = Form(default=""),
     question: str = Form(default=""),
     keywords: str = Form(default=""),
@@ -240,7 +297,13 @@ def create_query_from_form(
             quality_target=quality_target,
         )
     )
-    orchestrator.discover(query.id)
+    enqueue_tool(
+        db=orchestrator.session,
+        settings=get_settings(),
+        principal=request.state.principal,
+        tool_name="discover_documents",
+        arguments={"query_id": query.id},
+    )
     return RedirectResponse(url=f"/queries/{query.id}", status_code=303)
 
 
@@ -255,6 +318,47 @@ def analyze_document(document_id: str, orchestrator: Orchestrator = Depends(get_
     result = orchestrator.analyze_document(document_id)
     query_id = result["parsed_document"].collected_document.candidate.query_id
     return RedirectResponse(url=f"/queries/{query_id}", status_code=303)
+
+
+@router.post("/web/candidates/{candidate_id}/collect-async")
+def collect_candidate_async(
+    request: Request,
+    candidate_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    candidate = db.get(CandidateDocument, candidate_id)
+    if candidate is None:
+        raise ValueError(f"Candidate {candidate_id} not found")
+    run = enqueue_tool(
+        db=db,
+        settings=get_settings(),
+        principal=request.state.principal,
+        tool_name="collect_candidate",
+        arguments={"candidate_id": candidate_id},
+    )
+    return RedirectResponse(url=f"/queries/{candidate.query_id}?run_id={run.id}", status_code=303)
+
+
+@router.post("/web/documents/{document_id}/analyze-async")
+def analyze_document_async(
+    request: Request,
+    document_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    from kfabric.infra.models import CollectedDocument
+
+    collected = db.get(CollectedDocument, document_id)
+    if collected is None:
+        raise ValueError(f"Collected document {document_id} not found")
+    query_id = collected.candidate.query_id
+    run = enqueue_tool(
+        db=db,
+        settings=get_settings(),
+        principal=request.state.principal,
+        tool_name="analyze_document",
+        arguments={"document_id": document_id},
+    )
+    return RedirectResponse(url=f"/queries/{query_id}?run_id={run.id}", status_code=303)
 
 
 @router.post("/web/documents/{document_id}/accept")
@@ -289,6 +393,42 @@ def build_corpus(query_id: str, orchestrator: Orchestrator = Depends(get_orchest
     return RedirectResponse(url=f"/queries/{query_id}", status_code=303)
 
 
+@router.post("/web/queries/{query_id}/consolidate-async")
+def consolidate_query_async(request: Request, query_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
+    run = enqueue_tool(
+        db=db,
+        settings=get_settings(),
+        principal=request.state.principal,
+        tool_name="consolidate_fragments",
+        arguments={"query_id": query_id},
+    )
+    return RedirectResponse(url=f"/queries/{query_id}?run_id={run.id}", status_code=303)
+
+
+@router.post("/web/queries/{query_id}/syntheses-async")
+def create_synthesis_async(request: Request, query_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
+    run = enqueue_tool(
+        db=db,
+        settings=get_settings(),
+        principal=request.state.principal,
+        tool_name="generate_fragment_synthesis",
+        arguments={"query_id": query_id},
+    )
+    return RedirectResponse(url=f"/queries/{query_id}?run_id={run.id}", status_code=303)
+
+
+@router.post("/web/queries/{query_id}/corpora-async")
+def build_corpus_async(request: Request, query_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
+    run = enqueue_tool(
+        db=db,
+        settings=get_settings(),
+        principal=request.state.principal,
+        tool_name="build_corpus",
+        arguments={"query_id": query_id},
+    )
+    return RedirectResponse(url=f"/queries/{query_id}?run_id={run.id}", status_code=303)
+
+
 @router.post("/web/corpora/{corpus_id}/prepare-index")
 def prepare_index(
     corpus_id: str,
@@ -297,6 +437,25 @@ def prepare_index(
     corpus = orchestrator.get_corpus(corpus_id)
     orchestrator.prepare_index(corpus_id)
     return RedirectResponse(url=f"/queries/{corpus.query_id}", status_code=303)
+
+
+@router.post("/web/corpora/{corpus_id}/prepare-index-async")
+def prepare_index_async(
+    request: Request,
+    corpus_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    corpus = db.get(Corpus, corpus_id)
+    if corpus is None:
+        raise ValueError(f"Corpus {corpus_id} not found")
+    run = enqueue_tool(
+        db=db,
+        settings=get_settings(),
+        principal=request.state.principal,
+        tool_name="prepare_index",
+        arguments={"corpus_id": corpus_id},
+    )
+    return RedirectResponse(url=f"/queries/{corpus.query_id}?run_id={run.id}", status_code=303)
 
 
 @router.get("/web/corpora/{corpus_id}/export.html", response_class=HTMLResponse)

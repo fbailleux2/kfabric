@@ -157,7 +157,9 @@ def _apply_candidate_enrichment(candidate: CandidateDocument, soup: BeautifulSou
 
 def _extract_title(soup: BeautifulSoup, domain: str) -> str:
     selectors_by_domain = {
+        "arxiv.org": ("h1.title", ".title.mathjax", "main h1", "h1"),
         "eur-lex.europa.eu": (".eli-main-title", ".oj-doc-ti", ".doc-ti", "main h1", "h1"),
+        "github.com": ("strong[itemprop='name'] a", "meta[property='og:title']", "main h1", "h1"),
         "data.gouv.fr": ("[data-testid='dataset-title']", ".fr-card__title", "main h1", "h1"),
         "hal.science": (".Page-title", ".result-title", "main h1", "h1"),
         "legifrance.gouv.fr": (".title-page", ".titreTexte", "main h1", "h1"),
@@ -182,7 +184,9 @@ def _extract_title(soup: BeautifulSoup, domain: str) -> str:
 
 def _extract_snippet(soup: BeautifulSoup, domain: str) -> str:
     selectors_by_domain = {
+        "arxiv.org": (".abstract", "blockquote.abstract", ".authors", "main p"),
         "eur-lex.europa.eu": (".eli-context", ".eli-data dd", "#text p", "main p"),
+        "github.com": ("meta[name='description']", "meta[property='og:description']", "article.markdown-body p", "#readme p", ".markdown-body p", "main p"),
         "data.gouv.fr": (".fr-text--lead", ".dataset-description", "main p"),
         "hal.science": (".abstract", "#abstract", ".description", "main p"),
         "legifrance.gouv.fr": (".chapo", ".article-body p", ".texte p", "main p"),
@@ -207,7 +211,9 @@ def _extract_snippet(soup: BeautifulSoup, domain: str) -> str:
 
 def _extract_detail_url(domain: str, soup: BeautifulSoup, base_url: str) -> str | None:
     selectors_by_domain = {
+        "arxiv.org": ("a[href*='/abs/']",),
         "eur-lex.europa.eu": ("a[href*='/legal-content/']", "a[href*='uri=CELEX']"),
+        "github.com": ("a.v-align-middle[href]", "a[data-testid='result-list-item-title'][href]", ".search-title a[href]"),
         "data.gouv.fr": ("a[href*='/datasets/']", "a[href*='/reuses/']"),
         "hal.science": ("a[href*='/hal-']",),
         "legifrance.gouv.fr": ("a[href*='/jorf/id/']", "a[href*='/codes/article_lc/']", "a[href*='/loda/id/']"),
@@ -219,6 +225,10 @@ def _extract_detail_url(domain: str, soup: BeautifulSoup, base_url: str) -> str 
 
 def _extract_resource_url(domain: str, soup: BeautifulSoup, base_url: str) -> str | None:
     selectors_by_domain = {
+        "arxiv.org": (
+            "a[href*='/pdf/']",
+            "a[href$='.pdf']",
+        ),
         "eur-lex.europa.eu": (
             "a[href*='/TXT/PDF/']",
             "a[href$='.pdf']",

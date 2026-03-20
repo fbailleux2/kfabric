@@ -168,7 +168,15 @@ class Orchestrator:
         self.session.flush()
 
         query_terms = query.expansion_text.split() if query.expansion_text else []
-        score_payload = score_document(parsed.normalized_text, candidate.domain, query_terms, parsed.headings, self.settings)
+        score_payload = score_document(
+            parsed.normalized_text,
+            candidate.domain,
+            query_terms,
+            parsed.headings,
+            self.settings,
+            document_type=candidate.document_type,
+            quality_target=query.quality_target,
+        )
         score = DocumentScore(parsed_document_id=parsed.id, **score_payload)
         self.session.add(score)
         self.session.flush()

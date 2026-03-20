@@ -9,7 +9,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from kfabric import __version__
-from kfabric.config import AppSettings
+from kfabric.config import AppSettings, get_settings
+from kfabric.domain.schemas import QueryCreate
+from kfabric.infra.db import get_session_factory
 from kfabric.domain.enums import SessionStatus, ToolRunStatus
 from kfabric.infra.models import (
     CandidateDocument,
@@ -21,6 +23,7 @@ from kfabric.infra.models import (
     Query,
     SalvagedFragment,
     ToolRun,
+    User,
     utcnow,
 )
 from kfabric.services.auth_service import AuthContext, build_visibility_clause, can_access_query
@@ -132,6 +135,17 @@ def _discover_documents(orchestrator: Orchestrator, _db: Session, _settings: App
     return [{"id": candidate.id, "title": candidate.title} for candidate in orchestrator.discover(query_id)]
 
 
+def _create_query(orchestrator: Orchestrator, _db: Session, _settings: AppSettings, arguments: dict[str, Any]) -> Any:
+    query = orchestrator.create_query(QueryCreate.model_validate(arguments))
+    return {
+        "id": query.id,
+        "theme": query.theme,
+        "question": query.question,
+        "status": query.status,
+        "trace_id": query.trace_id,
+    }
+
+
 def _list_candidates(orchestrator: Orchestrator, _db: Session, _settings: AppSettings, arguments: dict[str, Any]) -> Any:
     query_id = arguments["query_id"]
     return [
@@ -144,6 +158,15 @@ def _list_candidates(orchestrator: Orchestrator, _db: Session, _settings: AppSet
         }
         for candidate in orchestrator.list_candidates(query_id)
     ]
+
+
+def _collect_candidate(orchestrator: Orchestrator, _db: Session, _settings: AppSettings, arguments: dict[str, Any]) -> Any:
+    collected = orchestrator.collect_candidate(arguments["candidate_id"])
+    return {
+        "candidate_id": arguments["candidate_id"],
+        "collected_document_id": collected.id,
+        "content_type": collected.content_type,
+    }
 
 
 def _analyze_document(orchestrator: Orchestrator, _db: Session, _settings: AppSettings, arguments: dict[str, Any]) -> Any:
@@ -178,9 +201,33 @@ def _list_salvaged_fragments(orchestrator: Orchestrator, _db: Session, _settings
     ]
 
 
+def _consolidate_fragments(orchestrator: Orchestrator, _db: Session, _settings: AppSettings, arguments: dict[str, Any]) -> Any:
+    clusters = orchestrator.consolidate_fragments(arguments["query_id"])
+    return [
+        {
+            "id": cluster.id,
+            "label": cluster.label,
+            "contribution_score": cluster.contribution_score,
+            "fragment_ids": cluster.fragment_ids,
+        }
+        for cluster in clusters
+    ]
+
+
 def _generate_fragment_synthesis(orchestrator: Orchestrator, _db: Session, _settings: AppSettings, arguments: dict[str, Any]) -> Any:
     synthesis = orchestrator.create_synthesis(arguments["query_id"], arguments.get("fragment_ids"))
     return {"synthesis_id": synthesis.id, "overall_confidence": synthesis.overall_confidence}
+
+
+def _build_corpus(orchestrator: Orchestrator, _db: Session, _settings: AppSettings, arguments: dict[str, Any]) -> Any:
+    corpus = orchestrator.build_corpus(arguments["query_id"])
+    return {"corpus_id": corpus.id, "status": corpus.status, "index_ready": corpus.index_ready}
+
+
+def _prepare_index(orchestrator: Orchestrator, _db: Session, _settings: AppSettings, arguments: dict[str, Any]) -> Any:
+    payload = orchestrator.prepare_index(arguments["corpus_id"])
+    payload["corpus_id"] = arguments["corpus_id"]
+    return payload
 
 
 def _get_corpus_status(orchestrator: Orchestrator, db: Session, _settings: AppSettings, arguments: dict[str, Any]) -> Any:
@@ -205,6 +252,29 @@ def get_tool_definitions() -> list[ToolDefinition]:
     common_security = {"authentication": "user_session_or_api_token", "audit": True}
     return [
         ToolDefinition(
+            name="create_query",
+            title="Create Query",
+            description="Create a new KFabric documentary query.",
+            version="1.0.0",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "theme": {"type": "string"},
+                    "question": {"type": "string"},
+                    "keywords": {"type": "array", "items": {"type": "string"}},
+                    "language": {"type": "string"},
+                    "period": {"type": "string"},
+                    "document_types": {"type": "array", "items": {"type": "string"}},
+                    "preferred_domains": {"type": "array", "items": {"type": "string"}},
+                    "excluded_domains": {"type": "array", "items": {"type": "string"}},
+                    "quality_target": {"type": "string"},
+                },
+            },
+            output_schema={"type": "object"},
+            security=common_security,
+            handler=_create_query,
+        ),
+        ToolDefinition(
             name="discover_documents",
             title="Discover Documents",
             description="Launch discovery for an existing KFabric query.",
@@ -223,6 +293,16 @@ def get_tool_definitions() -> list[ToolDefinition]:
             output_schema={"type": "array"},
             security=common_security,
             handler=_list_candidates,
+        ),
+        ToolDefinition(
+            name="collect_candidate",
+            title="Collect Candidate",
+            description="Collect a candidate document and persist the raw payload.",
+            version="1.0.0",
+            input_schema={"type": "object", "properties": {"candidate_id": {"type": "string"}}, "required": ["candidate_id"]},
+            output_schema={"type": "object"},
+            security=common_security,
+            handler=_collect_candidate,
         ),
         ToolDefinition(
             name="analyze_document",
@@ -265,6 +345,16 @@ def get_tool_definitions() -> list[ToolDefinition]:
             handler=_list_salvaged_fragments,
         ),
         ToolDefinition(
+            name="consolidate_fragments",
+            title="Consolidate Fragments",
+            description="Cluster salvaged fragments for a query.",
+            version="1.0.0",
+            input_schema={"type": "object", "properties": {"query_id": {"type": "string"}}, "required": ["query_id"]},
+            output_schema={"type": "array"},
+            security=common_security,
+            handler=_consolidate_fragments,
+        ),
+        ToolDefinition(
             name="generate_fragment_synthesis",
             title="Generate Fragment Synthesis",
             description="Create a synthesis from salvaged fragments.",
@@ -280,6 +370,26 @@ def get_tool_definitions() -> list[ToolDefinition]:
             output_schema={"type": "object"},
             security=common_security,
             handler=_generate_fragment_synthesis,
+        ),
+        ToolDefinition(
+            name="build_corpus",
+            title="Build Corpus",
+            description="Build the final corpus for a query.",
+            version="1.0.0",
+            input_schema={"type": "object", "properties": {"query_id": {"type": "string"}}, "required": ["query_id"]},
+            output_schema={"type": "object"},
+            security=common_security,
+            handler=_build_corpus,
+        ),
+        ToolDefinition(
+            name="prepare_index",
+            title="Prepare Index",
+            description="Prepare an indexable artifact for a corpus.",
+            version="1.0.0",
+            input_schema={"type": "object", "properties": {"corpus_id": {"type": "string"}}, "required": ["corpus_id"]},
+            output_schema={"type": "object"},
+            security=common_security,
+            handler=_prepare_index,
         ),
         ToolDefinition(
             name="get_corpus_status",
@@ -569,6 +679,132 @@ def invoke_tool(
     db.commit()
     db.refresh(tool_run)
     return tool_run
+
+
+def enqueue_tool(
+    db: Session,
+    settings: AppSettings,
+    principal: AuthContext,
+    tool_name: str,
+    arguments: dict[str, Any],
+    session_id: str | None = None,
+) -> ToolRun:
+    if session_id:
+        get_session(db, session_id)
+    get_tool_definition(tool_name)
+    tool_run = ToolRun(
+        tool_name=tool_name,
+        session_id=session_id,
+        status=ToolRunStatus.QUEUED.value,
+        input_payload=arguments,
+    )
+    db.add(tool_run)
+    db.commit()
+    db.refresh(tool_run)
+    dispatch_error = _dispatch_tool_via_celery(
+        tool_run.id,
+        tool_name,
+        arguments,
+        session_id,
+        settings,
+        principal,
+    )
+    if dispatch_error is not None:
+        tool_run.status = ToolRunStatus.FAILED.value
+        tool_run.error_payload = {
+            "message": dispatch_error,
+            "stage": "broker_dispatch",
+        }
+        db.commit()
+        db.refresh(tool_run)
+        return tool_run
+    db.refresh(tool_run)
+    return tool_run
+
+
+def get_tool_run(db: Session, run_id: str) -> ToolRun:
+    tool_run = db.get(ToolRun, run_id)
+    if tool_run is None:
+        raise ValueError(f"Tool run {run_id} not found")
+    return tool_run
+
+
+def list_tool_runs(db: Session, limit: int = 20) -> list[ToolRun]:
+    stmt = select(ToolRun).order_by(ToolRun.updated_at.desc()).limit(min(limit, 100))
+    return list(db.scalars(stmt))
+
+
+def execute_enqueued_tool(
+    run_id: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+    session_id: str | None,
+    database_url: str,
+    user_id: str | None,
+    auth_mode: str,
+    is_system: bool,
+) -> None:
+    session = get_session_factory(database_url)()
+    try:
+        tool_run = session.get(ToolRun, run_id)
+        if tool_run is None:
+            return
+        tool_run.status = ToolRunStatus.RUNNING.value
+        session.commit()
+
+        if session_id:
+            get_session(session, session_id)
+
+        settings = get_settings()
+        principal = _rehydrate_principal(session, user_id=user_id, auth_mode=auth_mode, is_system=is_system)
+        tool = get_tool_definition(tool_name)
+        orchestrator = Orchestrator(session=session, settings=settings, principal=principal)
+        try:
+            output = tool.handler(orchestrator, session, settings, arguments)
+            tool_run.status = ToolRunStatus.SUCCEEDED.value
+            tool_run.output_payload = {"result": output}
+            tool_run.error_payload = None
+        except Exception as exc:
+            tool_run.status = ToolRunStatus.FAILED.value
+            tool_run.error_payload = {"message": str(exc)}
+        session.commit()
+    finally:
+        session.close()
+
+
+def _rehydrate_principal(session: Session, *, user_id: str | None, auth_mode: str, is_system: bool) -> AuthContext:
+    if is_system:
+        return AuthContext(user=None, auth_mode=auth_mode, is_system=True)
+    user = session.get(User, user_id) if user_id else None
+    return AuthContext(user=user, auth_mode=auth_mode)
+
+
+def _dispatch_tool_via_celery(
+    run_id: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+    session_id: str | None,
+    settings: AppSettings,
+    principal: AuthContext,
+) -> str | None:
+    if not settings.prefer_celery_tasks:
+        return "Async broker dispatch is disabled by configuration"
+    try:
+        from kfabric.workers.tasks import run_tool as run_tool_task
+
+        run_tool_task.delay(
+            run_id=run_id,
+            tool_name=tool_name,
+            arguments=arguments,
+            session_id=session_id,
+            user_id=principal.user_id,
+            auth_mode=principal.auth_mode,
+            is_system=principal.is_system,
+            database_url=settings.database_url,
+        )
+        return None
+    except Exception as exc:
+        return f"Celery broker dispatch failed: {exc}"
 
 
 def _ensure_query_access(principal: AuthContext, query: Query) -> None:

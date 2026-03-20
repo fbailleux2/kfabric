@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% block title %}KFabric | {{ query.theme or query.question or query.id }}{% endblock %}
 {% block content %}
+{% if has_pending_runs %}
+<meta http-equiv="refresh" content="2" />
+{% endif %}
 <section class="dashboard-hero">
   <div>
     <p class="eyebrow">Workflow corpus</p>
@@ -18,9 +21,12 @@
 </section>
 
 <section class="action-bar">
-  <form method="post" action="/web/queries/{{ query.id }}/consolidate"><button type="submit">Consolider les fragments</button></form>
-  <form method="post" action="/web/queries/{{ query.id }}/syntheses"><button type="submit">Générer la synthèse</button></form>
-  <form method="post" action="/web/queries/{{ query.id }}/corpora"><button type="submit" class="primary-button">Construire le corpus</button></form>
+  {% if has_pending_runs %}
+    <span class="status-pill running">actualisation auto active</span>
+  {% endif %}
+  <form method="post" action="/web/queries/{{ query.id }}/consolidate-async"><button type="submit">Consolider async</button></form>
+  <form method="post" action="/web/queries/{{ query.id }}/syntheses-async"><button type="submit">Synthèse async</button></form>
+  <form method="post" action="/web/queries/{{ query.id }}/corpora-async"><button type="submit" class="primary-button">Corpus async</button></form>
 </section>
 
 <section class="dashboard-grid">
@@ -62,9 +68,9 @@
               </td>
               <td class="action-cell">
                 {% if not collected %}
-                  <form method="post" action="/web/candidates/{{ candidate.id }}/collect"><button type="submit">Collecter</button></form>
+                  <form method="post" action="/web/candidates/{{ candidate.id }}/collect-async"><button type="submit">Collecter async</button></form>
                 {% elif not parsed %}
-                  <form method="post" action="/web/documents/{{ collected.id }}/analyze"><button type="submit">Analyser</button></form>
+                  <form method="post" action="/web/documents/{{ collected.id }}/analyze-async"><button type="submit">Analyser async</button></form>
                 {% else %}
                   <div class="inline-actions">
                     <form method="post" action="/web/documents/{{ parsed.id }}/accept"><button type="submit">Accepter</button></form>
@@ -117,6 +123,27 @@
     </div>
   </article>
 
+  <article class="panel">
+    <div class="panel-head">
+      <h2>Runs récents</h2>
+      <span>{{ recent_runs|length }} runs</span>
+    </div>
+    <div class="stack-list">
+      {% for run in recent_runs %}
+        <div class="stack-item">
+          <div class="between">
+            <strong>{{ run.tool_name }}</strong>
+            <span class="status-pill {{ run.status }}">{{ run.status }}</span>
+          </div>
+          <p>{{ run.input_payload }}</p>
+          <small>maj {{ run.updated_at.strftime("%H:%M:%S") }}</small>
+        </div>
+      {% else %}
+        <div class="empty-card">Aucun run asynchrone récent.</div>
+      {% endfor %}
+    </div>
+  </article>
+
   <article class="panel span-2">
     <div class="panel-head">
       <h2>Synthèses documentaires</h2>
@@ -153,8 +180,8 @@
             <div class="inline-actions">
               <a href="/web/corpora/{{ corpus.id }}/export.html" target="_blank">Voir l’export</a>
               <a href="/web/corpora/{{ corpus.id }}/export.md">Markdown</a>
-              <form method="post" action="/web/corpora/{{ corpus.id }}/prepare-index">
-                <button type="submit">Préparer l’index</button>
+              <form method="post" action="/web/corpora/{{ corpus.id }}/prepare-index-async">
+                <button type="submit">Préparer l’index async</button>
               </form>
             </div>
           </div>

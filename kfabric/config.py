@@ -19,6 +19,8 @@ class AppSettings(BaseSettings):
     enable_metrics: bool = True
     enable_mcp: bool = True
     secure_mode: bool = True
+    prefer_celery_tasks: bool = True
+    celery_always_eager: bool = False
     remote_discovery_enabled: bool = False
     remote_collection_enabled: bool = False
     max_fragment_chars: int = 280

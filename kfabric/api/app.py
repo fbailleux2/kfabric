@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
 
@@ -18,6 +17,7 @@ from kfabric.api.routes.system import router as system_router
 from kfabric.config import get_settings
 from kfabric.infra.db import init_db
 from kfabric.infra.observability import REQUEST_COUNTER, REQUEST_LATENCY, get_logger, setup_logging
+from kfabric.web.paths import resolve_web_path
 from kfabric.web.router import router as web_router
 
 
@@ -64,7 +64,7 @@ def create_app() -> FastAPI:
     init_db(settings)
     app = FastAPI(title=settings.app_name, version=__version__, docs_url="/docs", redoc_url="/redoc")
     app.add_middleware(TraceMiddleware)
-    static_dir = Path(__file__).resolve().parent.parent / "web" / "static"
+    static_dir = resolve_web_path("static")
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(system_router, prefix="/api/v1")
@@ -169,6 +169,10 @@ def create_app() -> FastAPI:
                 }
             },
         )
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon_redirect() -> RedirectResponse:
+        return RedirectResponse(url="/static/favicon.svg", status_code=307)
 
     return app
 

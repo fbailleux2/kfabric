@@ -265,6 +265,40 @@ select {
   padding: 1rem;
 }
 
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 88px;
+  padding: 0.28rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(11, 19, 37, 0.82);
+  color: var(--muted);
+  text-transform: lowercase;
+}
+
+.status-pill.ok,
+.status-pill.succeeded,
+.status-pill.ready {
+  color: #9ef0b4;
+  border-color: rgba(98, 220, 141, 0.35);
+}
+
+.status-pill.degraded,
+.status-pill.running,
+.status-pill.queued {
+  color: #ffd37e;
+  border-color: rgba(255, 190, 92, 0.35);
+}
+
+.status-pill.error,
+.status-pill.failed,
+.status-pill.not_ready {
+  color: #ff9d9d;
+  border-color: rgba(255, 124, 124, 0.35);
+}
+
 .dashboard-hero {
   display: flex;
   justify-content: space-between;

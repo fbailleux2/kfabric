@@ -4,7 +4,13 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from kfabric import __version__
-from kfabric.api.deps import get_db, get_request_principal, get_runtime_settings, require_authenticated_principal
+from kfabric.api.deps import (
+    get_db,
+    get_request_principal,
+    get_runtime_settings,
+    require_admin_principal,
+    require_authenticated_principal,
+)
 from kfabric.api.serializers import (
     serialize_mcp_session,
     serialize_prompt,
@@ -30,12 +36,15 @@ from kfabric.domain.schemas import (
 from kfabric.mcp.registry import (
     close_session,
     create_session,
+    enqueue_tool,
     get_capabilities,
     get_prompt_definition,
     get_prompt_definitions,
     get_resource_definition,
     get_resource_definitions,
     get_session,
+    get_tool_run,
+    list_tool_runs,
     get_tool_definition,
     get_tool_definitions,
     invoke_tool,
@@ -103,8 +112,21 @@ def call_tool(
     settings: AppSettings = Depends(get_runtime_settings),
     principal=Depends(get_request_principal),
 ) -> ToolRunResponse:
-    run = invoke_tool(db, settings, principal, tool_name, payload.arguments, payload.session_id)
+    if payload.async_run:
+        run = enqueue_tool(db, settings, principal, tool_name, payload.arguments, payload.session_id)
+    else:
+        run = invoke_tool(db, settings, principal, tool_name, payload.arguments, payload.session_id)
     return serialize_tool_run(run)
+
+
+@router.get("/tool-runs", response_model=list[ToolRunResponse], dependencies=[Depends(require_admin_principal)])
+def recent_tool_runs(limit: int = 20, db: Session = Depends(get_db)) -> list[ToolRunResponse]:
+    return [serialize_tool_run(tool_run) for tool_run in list_tool_runs(db, limit)]
+
+
+@router.get("/tool-runs/{run_id}", response_model=ToolRunResponse)
+def read_tool_run(run_id: str, db: Session = Depends(get_db)) -> ToolRunResponse:
+    return serialize_tool_run(get_tool_run(db, run_id))
 
 
 @router.get("/resources", response_model=list[ResourceResponse])

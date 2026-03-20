@@ -183,8 +183,12 @@ class ToolRunResponse(SchemaModel):
     run_id: str
     tool_name: str
     status: ToolRunStatus
+    input: dict[str, Any] = Field(default_factory=dict)
     output: Any | None = None
+    error: dict[str, Any] | None = None
     trace_id: str
+    created_at: datetime
+    updated_at: datetime
 
 
 class ToolSchemaResponse(SchemaModel):

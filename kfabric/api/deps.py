@@ -106,7 +106,6 @@ def require_web_session(
 
 def require_admin_web_session(
     principal: AuthContext = Depends(get_request_principal),
-    request: Request | None = None,
 ) -> AuthContext:
     if principal.is_admin:
         return principal

@@ -4,9 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{% block title %}KFabric{% endblock %}</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/static/style.css" />
     <script defer src="https://unpkg.com/htmx.org@1.9.12"></script>
-    <script defer src="https://unpkg.com/alpinejs@3.14.0/dist/cdn.min.js"></script>
   </head>
   <body hx-boost="true">
     <div class="page-shell">
@@ -23,6 +23,9 @@
           <a href="/api/v1/version">Version</a>
           <a href="/api/v1/mcp/capabilities">MCP</a>
           {% if request.state.web_authenticated %}
+            {% if request.state.current_user and request.state.current_user.role == "admin" %}
+              <a href="/ops">Ops</a>
+            {% endif %}
             <span>{{ request.state.current_user.display_name or request.state.current_user.email }}</span>
             <form method="post" action="/web/auth/logout">
               <button type="submit">Déconnexion</button>
